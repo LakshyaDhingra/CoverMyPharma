@@ -88,15 +88,18 @@ export default function UploadPage({ onContinue }: UploadPageProps) {
         );
 
         const fileData = await file.arrayBuffer();
-        const base64Data = btoa(
-          String.fromCharCode(...new Uint8Array(fileData)),
-        );
+        const uint8Array = new Uint8Array(fileData);
+        let binary = "";
+        for (let i = 0; i < uint8Array.length; i++) {
+          binary += String.fromCharCode(uint8Array[i]);
+        }
+        const base64Data = btoa(binary);
 
         if (import.meta.env.DEV) {
           const genAI = new GoogleGenerativeAI(
             import.meta.env.VITE_GEMINI_API_KEY,
           );
-          const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
+          const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
           const result = await model.generateContent([
             "Extract coverage rules, PA criteria, and diagnosis codes from this PDF.",
             {

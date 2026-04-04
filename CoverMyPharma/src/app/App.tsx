@@ -52,10 +52,7 @@ export default function App() {
   const [compareIds, setCompareIds] = useState<Set<string>>(new Set());
   const [showUpload, setShowUpload] = useState(true);
 
-  if (showUpload) {
-    return <UploadPage onContinue={() => setShowUpload(false)} />;
-  }
-
+  // ── Hooks MUST come before any conditional returns ──
   const filteredPlans = useMemo(() => {
     return MOCK_PLANS.filter((p) => {
       if (
@@ -97,6 +94,11 @@ export default function App() {
   const handleSearch = (e?: FormEvent) => {
     e?.preventDefault();
   };
+
+  // ── Now conditional rendering is OK ──
+  if (showUpload) {
+    return <UploadPage onContinue={() => setShowUpload(false)} />;
+  }
 
   const stats = {
     total: filteredPlans.length,
