@@ -1,4 +1,10 @@
-import { useState, useRef, type DragEvent, type ChangeEvent } from "react";
+import {
+  useState,
+  useRef,
+  useCallback,
+  type DragEvent,
+  type ChangeEvent,
+} from "react";
 import {
   Upload,
   FileText,
@@ -10,6 +16,7 @@ import {
   TrendingUp,
   ChevronRight,
 } from "lucide-react";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { useAuth0 } from "@auth0/auth0-react";
 
 import logo from "@/assets/CoverMyPharma.svg";
@@ -54,53 +61,11 @@ function formatBytes(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-async function parsePDF(
-  file: File,
-  id: string,
-  setFiles: React.Dispatch<React.SetStateAction<UploadedFile[]>>,
-  getAccessTokenSilently: () => Promise<string>,
-) {
-  setFiles((prev) =>
-    prev.map((f) => (f.id === id ? { ...f, status: "processing" } : f)),
-  );
-  try {
-    const accessToken = await getAccessTokenSilently();
-    const fileData = await file.arrayBuffer();
-    const base64Data = btoa(String.fromCharCode(...new Uint8Array(fileData)));
-
-    const response = await fetch("/api/parse-pdf", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        fileData: base64Data,
-        accessToken,
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error("Failed to parse PDF");
-    }
-
-    const result = await response.json();
-    console.log("Parsed text:", result.parsedText);
-    // Store parsed data if needed
-    setFiles((prev) =>
-      prev.map((f) => (f.id === id ? { ...f, status: "done" } : f)),
-    );
-  } catch (error) {
-    console.error("Error parsing PDF:", error);
-    setFiles((prev) =>
-      prev.map((f) => (f.id === id ? { ...f, status: "error" } : f)),
-    );
-  }
-}
-
 export default function UploadPage({ onContinue }: UploadPageProps) {
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const processingRef = useRef<Set<string>>(new Set());
   const {
     loginWithRedirect,
     logout,
@@ -109,20 +74,87 @@ export default function UploadPage({ onContinue }: UploadPageProps) {
     getAccessTokenSilently,
   } = useAuth0();
 
-  const addFiles = (incoming: FileList | null) => {
-    if (!incoming) return;
-    Array.from(incoming).forEach((f) => {
-      if (f.type !== "application/pdf") return;
-      const newFile: UploadedFile = {
-        id: crypto.randomUUID(),
-        name: f.name,
-        size: f.size,
-        status: "uploading",
-      };
-      setFiles((prev) => [...prev, newFile]);
-      parsePDF(f, newFile.id, setFiles, getAccessTokenSilently);
-    });
-  };
+  const handlePdfProcessing = useCallback(
+    async (file: File, fileId: string) => {
+      // Prevent duplicate processing
+      if (processingRef.current.has(fileId)) return;
+      processingRef.current.add(fileId);
+
+      try {
+        setFiles((prev) =>
+          prev.map((f) =>
+            f.id === fileId ? { ...f, status: "processing" } : f,
+          ),
+        );
+
+        const fileData = await file.arrayBuffer();
+        const base64Data = btoa(
+          String.fromCharCode(...new Uint8Array(fileData)),
+        );
+
+        if (import.meta.env.DEV) {
+          const genAI = new GoogleGenerativeAI(
+            import.meta.env.VITE_GEMINI_API_KEY,
+          );
+          const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
+          const result = await model.generateContent([
+            "Extract coverage rules, PA criteria, and diagnosis codes from this PDF.",
+            {
+              inlineData: { data: base64Data, mimeType: "application/pdf" },
+            },
+          ]);
+          console.log("✓ PDF parsed successfully");
+          setFiles((prev) =>
+            prev.map((f) => (f.id === fileId ? { ...f, status: "done" } : f)),
+          );
+          return;
+        }
+
+        // Production
+        const token = await getAccessTokenSilently();
+        const res = await fetch("/api/parse-pdf", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fileData: base64Data, accessToken: token }),
+        });
+
+        if (!res.ok) throw new Error("API error");
+        console.log("✓ PDF parsed successfully");
+        setFiles((prev) =>
+          prev.map((f) => (f.id === fileId ? { ...f, status: "done" } : f)),
+        );
+      } catch (err) {
+        console.error("✗ PDF processing failed:", err);
+        setFiles((prev) =>
+          prev.map((f) => (f.id === fileId ? { ...f, status: "error" } : f)),
+        );
+      } finally {
+        processingRef.current.delete(fileId);
+      }
+    },
+    [getAccessTokenSilently],
+  );
+
+  const addFiles = useCallback(
+    (incoming: FileList | null) => {
+      if (!incoming) return;
+      if (!isAuthenticated) {
+        loginWithRedirect();
+        return;
+      }
+
+      Array.from(incoming).forEach((file) => {
+        if (file.type !== "application/pdf") return;
+        const fileId = crypto.randomUUID();
+        setFiles((prev) => [
+          ...prev,
+          { id: fileId, name: file.name, size: file.size, status: "uploading" },
+        ]);
+        handlePdfProcessing(file, fileId);
+      });
+    },
+    [isAuthenticated, loginWithRedirect, handlePdfProcessing],
+  );
 
   const removeFile = (id: string) =>
     setFiles((prev) => prev.filter((f) => f.id !== id));
@@ -217,231 +249,216 @@ export default function UploadPage({ onContinue }: UploadPageProps) {
         </p>
       </div>
 
-      {/* ── Upload + features ── */}
-      <main className="flex-1 max-w-5xl mx-auto w-full px-6 py-12 grid grid-cols-1 lg:grid-cols-2 gap-10 items-start">
-        {/* Upload card */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-lg p-8 hover:shadow-xl transition-shadow duration-300">
-          <h2
-            className="text-lg font-semibold mb-1"
-            style={{ color: "#3d3d3d" }}
-          >
-            Upload policy documents
-          </h2>
-          <p className="text-sm mb-6" style={{ color: "#9ca3af" }}>
-            PDF files only · Multiple files supported
-          </p>
-
-          {/* Drop zone */}
-          <div
-            onDragOver={(e) => {
-              e.preventDefault();
-              setIsDragging(true);
-            }}
-            onDragLeave={() => setIsDragging(false)}
-            onDrop={handleDrop}
-            onClick={() => inputRef.current?.click()}
-            className="border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all"
-            style={{
-              borderColor: isDragging ? "#5b8db8" : "#e5e7eb",
-              background: isDragging ? "rgba(91,141,184,0.04)" : "transparent",
-            }}
-          >
-            <input
-              ref={inputRef}
-              type="file"
-              accept="application/pdf"
-              multiple
-              className="hidden"
-              onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                addFiles(e.target.files)
-              }
-            />
-            <div
-              className="w-12 h-12 rounded-xl flex items-center justify-center mx-auto mb-3"
-              style={{ background: "rgba(91,141,184,0.1)" }}
-            >
-              <Upload className="w-5 h-5" style={{ color: "#5b8db8" }} />
-            </div>
-            <p
-              className="text-sm font-medium mb-1"
+      <main className="flex-1 w-full px-8 py-12 flex flex-col items-center gap-10">
+        {/* Login Required Message */}
+        {!isAuthenticated && (
+          <div className="bg-white rounded-2xl border-2 border-red-200 shadow-lg p-10 w-full max-w-2xl text-center">
+            <Shield className="w-12 h-12 mx-auto mb-4 text-red-500" />
+            <h2
+              className="text-2xl font-semibold mb-2"
               style={{ color: "#3d3d3d" }}
             >
-              Drop policy PDFs here
+              Sign in to upload
+            </h2>
+            <p className="text-base mb-6" style={{ color: "#9ca3af" }}>
+              You need to be logged in to upload and process policy documents
+              with our secure AI system.
             </p>
-            <p className="text-xs" style={{ color: "#9ca3af" }}>
-              or{" "}
+            <button
+              onClick={() => loginWithRedirect()}
+              className="px-8 py-3 rounded-lg text-white font-medium transition-all hover:shadow-lg"
+              style={{
+                background: "#5b8db8",
+              }}
+            >
+              Sign in now
+            </button>
+          </div>
+        )}
+
+        {/* Upload card — only show if authenticated */}
+        {isAuthenticated && (
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-lg p-10 w-full max-w-2xl">
+            <h2
+              className="text-xl font-semibold mb-1"
+              style={{ color: "#3d3d3d" }}
+            >
+              Upload policy documents
+            </h2>
+            <p className="text-sm mb-6" style={{ color: "#9ca3af" }}>
+              PDF files only · Multiple files supported
+            </p>
+
+            {/* Drop zone — taller */}
+            <div
+              onDragOver={(e) => {
+                e.preventDefault();
+                setIsDragging(true);
+              }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={handleDrop}
+              onClick={() => inputRef.current?.click()}
+              className="border-2 border-dashed rounded-xl py-16 text-center cursor-pointer transition-all"
+              style={{
+                borderColor: isDragging ? "#5b8db8" : "#e5e7eb",
+                background: isDragging ? "rgba(91,141,184,0.04)" : "#fafafa",
+              }}
+            >
+              <input
+                ref={inputRef}
+                type="file"
+                accept="application/pdf"
+                multiple
+                className="hidden"
+                onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                  addFiles(e.target.files)
+                }
+              />
+              <Upload
+                className="w-8 h-8 mx-auto mb-3"
+                style={{ color: "#5b8db8" }}
+              />
+              <p
+                className="text-base font-medium mb-1"
+                style={{ color: "#3d3d3d" }}
+              >
+                Drop policy PDFs here
+              </p>
+              <p className="text-sm" style={{ color: "#9ca3af" }}>
+                or{" "}
+                <span
+                  className="underline cursor-pointer"
+                  style={{ color: "#5b8db8" }}
+                >
+                  browse files
+                </span>
+              </p>
+            </div>
+
+            {/* File list */}
+            {files.length > 0 && (
+              <div className="mt-4 flex flex-col gap-2">
+                {files.map((f) => (
+                  <div
+                    key={f.id}
+                    className="flex items-center gap-3 p-3 rounded-lg border"
+                    style={{ background: "#f9fafb", borderColor: "#f3f4f6" }}
+                  >
+                    <FileText
+                      className="w-4 h-4 flex-shrink-0"
+                      style={{ color: "#9ca3af" }}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p
+                        className="text-xs font-medium truncate"
+                        style={{ color: "#3d3d3d" }}
+                      >
+                        {f.name}
+                      </p>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        {(f.status === "uploading" ||
+                          f.status === "processing") && (
+                          <Loader2
+                            className="w-3 h-3 animate-spin"
+                            style={{ color: "#5b8db8" }}
+                          />
+                        )}
+                        {f.status === "done" && (
+                          <CheckCircle className="w-3 h-3 text-emerald-500" />
+                        )}
+                        {f.status === "error" && (
+                          <X className="w-3 h-3 text-red-400" />
+                        )}
+                        <span
+                          className="text-xs"
+                          style={{
+                            color:
+                              f.status === "done"
+                                ? "#10b981"
+                                : f.status === "error"
+                                  ? "#ef4444"
+                                  : "#5b8db8",
+                          }}
+                        >
+                          {f.status === "uploading"
+                            ? "Uploading..."
+                            : f.status === "processing"
+                              ? "AI processing..."
+                              : f.status === "done"
+                                ? "Ready"
+                                : "Failed"}
+                        </span>
+                        <span className="text-xs" style={{ color: "#d1d5db" }}>
+                          ·
+                        </span>
+                        <span className="text-xs" style={{ color: "#9ca3af" }}>
+                          {formatBytes(f.size)}
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => removeFile(f.id)}
+                      className="hover:opacity-70 transition-opacity"
+                      style={{ color: "#d1d5db" }}
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* CTA */}
+            <button
+              onClick={onContinue}
+              disabled={!canContinue}
+              className="mt-6 w-full py-3 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-all"
+              style={{
+                background: canContinue ? "#3d3d3d" : "#f3f4f6",
+                color: canContinue ? "#ffffff" : "#9ca3af",
+                cursor: canContinue ? "pointer" : "not-allowed",
+              }}
+            >
+              {canContinue ? (
+                <>
+                  View coverage for {doneCount} document
+                  {doneCount > 1 ? "s" : ""}
+                  <ChevronRight className="w-4 h-4" />
+                </>
+              ) : (
+                "Upload at least one PDF to continue"
+              )}
+            </button>
+
+            <p
+              className="text-center text-xs mt-4"
+              style={{ color: "#9ca3af" }}
+            >
+              No account required to try ·{" "}
               <span
                 className="underline cursor-pointer"
                 style={{ color: "#5b8db8" }}
               >
-                browse files
-              </span>
+                Sign in
+              </span>{" "}
+              to save results
             </p>
           </div>
+        )}
 
-          {/* File list */}
-          {files.length > 0 && (
-            <div className="mt-4 flex flex-col gap-2">
-              {files.map((f) => (
-                <div
-                  key={f.id}
-                  className="flex items-center gap-3 p-3 rounded-lg border"
-                  style={{ background: "#f9fafb", borderColor: "#f3f4f6" }}
-                >
-                  <FileText
-                    className="w-4 h-4 flex-shrink-0"
-                    style={{ color: "#9ca3af" }}
-                  />
-                  <div className="flex-1 min-w-0">
-                    <p
-                      className="text-xs font-medium truncate"
-                      style={{ color: "#3d3d3d" }}
-                    >
-                      {f.name}
-                    </p>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      {(f.status === "uploading" ||
-                        f.status === "processing") && (
-                        <Loader2
-                          className="w-3 h-3 animate-spin"
-                          style={{ color: "#5b8db8" }}
-                        />
-                      )}
-                      {f.status === "done" && (
-                        <CheckCircle className="w-3 h-3 text-emerald-500" />
-                      )}
-                      {f.status === "error" && (
-                        <X className="w-3 h-3 text-red-400" />
-                      )}
-                      <span
-                        className="text-xs"
-                        style={{
-                          color:
-                            f.status === "done"
-                              ? "#10b981"
-                              : f.status === "error"
-                                ? "#ef4444"
-                                : "#5b8db8",
-                        }}
-                      >
-                        {f.status === "uploading"
-                          ? "Uploading..."
-                          : f.status === "processing"
-                            ? "AI processing..."
-                            : f.status === "done"
-                              ? "Ready"
-                              : "Failed"}
-                      </span>
-                      <span className="text-xs" style={{ color: "#d1d5db" }}>
-                        ·
-                      </span>
-                      <span className="text-xs" style={{ color: "#9ca3af" }}>
-                        {formatBytes(f.size)}
-                      </span>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => removeFile(f.id)}
-                    className="hover:opacity-70 transition-opacity"
-                    style={{ color: "#d1d5db" }}
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* CTA */}
-          <button
-            onClick={onContinue}
-            disabled={!canContinue}
-            className="mt-6 w-full py-3 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-all"
-            style={{
-              background: canContinue ? "#3d3d3d" : "#f3f4f6",
-              color: canContinue ? "#ffffff" : "#9ca3af",
-              cursor: canContinue ? "pointer" : "not-allowed",
-            }}
-          >
-            {canContinue ? (
-              <>
-                View coverage for {doneCount} document{doneCount > 1 ? "s" : ""}
-                <ChevronRight className="w-4 h-4" />
-              </>
-            ) : (
-              "Upload at least one PDF to continue"
-            )}
-          </button>
-
-          <p className="text-center text-xs mt-4" style={{ color: "#9ca3af" }}>
-            No account required to try ·{" "}
-            <span
-              className="underline cursor-pointer"
-              style={{ color: "#5b8db8" }}
-            >
-              Sign in
-            </span>{" "}
-            to save results
-          </p>
-        </div>
-
-        {/* Feature list */}
-        <div className="flex flex-col gap-6 pt-2">
-          <p
-            className="text-xs font-semibold uppercase tracking-widest"
-            style={{ color: "#5b8db8" }}
-          >
-            What Cover My Pharma does
-          </p>
-
+        {/* Features — simple 3-column row underneath */}
+        <div className="w-full max-w-2xl grid grid-cols-3 gap-6 pb-12">
           {FEATURES.map((f, i) => (
-            <div key={i} className="flex gap-4">
-              <div
-                className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5"
-                style={{ background: "rgba(61,61,61,0.06)" }}
+            <div key={i} className="text-center">
+              <p className="text-sm font-semibold text-white mb-1">{f.title}</p>
+              <p
+                className="text-xs leading-relaxed"
+                style={{ color: "rgba(255,255,255,0.6)" }}
               >
-                <span style={{ color: "#3d3d3d" }}>{f.icon}</span>
-              </div>
-              <div>
-                <p
-                  className="text-sm font-semibold mb-1"
-                  style={{ color: "#3d3d3d" }}
-                >
-                  {f.title}
-                </p>
-                <p
-                  className="text-sm leading-relaxed"
-                  style={{ color: "#9ca3af" }}
-                >
-                  {f.desc}
-                </p>
-              </div>
+                {f.desc}
+              </p>
             </div>
           ))}
-
-          {/* Payer badges */}
-          <div className="mt-4 pt-6 border-t border-gray-100">
-            <p className="text-xs mb-3" style={{ color: "#9ca3af" }}>
-              Currently tracking policies from
-            </p>
-            <div className="flex gap-2 flex-wrap">
-              {["Aetna", "UHC", "Cigna"].map((payer) => (
-                <span
-                  key={payer}
-                  className="text-xs font-medium px-3 py-1.5 rounded-lg border bg-white"
-                  style={{ color: "#3d3d3d", borderColor: "#e5e7eb" }}
-                >
-                  {payer}
-                </span>
-              ))}
-              <span
-                className="text-xs px-3 py-1.5 rounded-lg border border-dashed"
-                style={{ color: "#9ca3af", borderColor: "#d1d5db" }}
-              >
-                + more coming
-              </span>
-            </div>
-          </div>
         </div>
       </main>
     </div>

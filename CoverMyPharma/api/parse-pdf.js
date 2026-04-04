@@ -69,7 +69,7 @@ export default async function handler(req, res) {
       processedAt: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("Error processing PDF:", error);
-    res.status(500).json({ error: "Failed to process PDF" });
+    console.error("Error processing PDF:", error.message || error);
+    res.status(500).json({ error: error.message || "Failed to process PDF" });
   }
 }
