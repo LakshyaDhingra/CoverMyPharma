@@ -10,7 +10,6 @@ import {
   TrendingUp,
   ChevronRight,
 } from "lucide-react";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import { useAuth0 } from "@auth0/auth0-react";
 
 import logo from "@/assets/CoverMyPharma.svg";
@@ -30,8 +29,6 @@ interface UploadedFile {
 interface UploadPageProps {
   onContinue: () => void;
 }
-
-const genAI = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY);
 
 const FEATURES = [
   {
@@ -61,25 +58,33 @@ async function parsePDF(
   file: File,
   id: string,
   setFiles: React.Dispatch<React.SetStateAction<UploadedFile[]>>,
+  getAccessTokenSilently: () => Promise<string>,
 ) {
   setFiles((prev) =>
     prev.map((f) => (f.id === id ? { ...f, status: "processing" } : f)),
   );
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const accessToken = await getAccessTokenSilently();
     const fileData = await file.arrayBuffer();
-    const filePart = {
-      inlineData: {
-        data: btoa(String.fromCharCode(...new Uint8Array(fileData))),
-        mimeType: file.type,
+    const base64Data = btoa(String.fromCharCode(...new Uint8Array(fileData)));
+
+    const response = await fetch("/api/parse-pdf", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
       },
-    };
-    const result = await model.generateContent([
-      "Extract the coverage rules, PA criteria, and diagnosis codes from this PDF.",
-      filePart,
-    ]);
-    const text = result.response.text();
-    console.log("Parsed text:", text);
+      body: JSON.stringify({
+        fileData: base64Data,
+        accessToken,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error("Failed to parse PDF");
+    }
+
+    const result = await response.json();
+    console.log("Parsed text:", result.parsedText);
     // Store parsed data if needed
     setFiles((prev) =>
       prev.map((f) => (f.id === id ? { ...f, status: "done" } : f)),
@@ -96,7 +101,13 @@ export default function UploadPage({ onContinue }: UploadPageProps) {
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  const { loginWithRedirect, logout, user, isAuthenticated } = useAuth0();
+  const {
+    loginWithRedirect,
+    logout,
+    user,
+    isAuthenticated,
+    getAccessTokenSilently,
+  } = useAuth0();
 
   const addFiles = (incoming: FileList | null) => {
     if (!incoming) return;
@@ -109,7 +120,7 @@ export default function UploadPage({ onContinue }: UploadPageProps) {
         status: "uploading",
       };
       setFiles((prev) => [...prev, newFile]);
-      parsePDF(f, newFile.id, setFiles);
+      parsePDF(f, newFile.id, setFiles, getAccessTokenSilently);
     });
   };
 
