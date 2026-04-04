@@ -1,7 +1,13 @@
 import { useState, useMemo, type FormEvent, type ReactNode } from "react";
 import {
-  Search, GitCompareArrows, LayoutGrid, CheckCircle, AlertTriangle,
-  Pill, ClipboardList, History,
+  Search,
+  GitCompareArrows,
+  LayoutGrid,
+  CheckCircle,
+  AlertTriangle,
+  Pill,
+  ClipboardList,
+  History,
 } from "lucide-react";
 import { MOCK_PLANS, DIAGNOSIS_OPTIONS } from "./components/mock-data";
 import { PlanSnapshotCard } from "./components/plan-card";
@@ -9,15 +15,28 @@ import { DetailPanel } from "./components/detail-panel";
 import { ComparisonPanel } from "./components/comparison-panel";
 import { CriteriaLookup } from "./components/criteria-lookup";
 import { PolicyChanges } from "./components/policy-changes";
+import UploadPage from "./components/upload-page";
 
 const PAYERS = ["Aetna", "UHC", "Cigna"] as const;
 
 type ActiveTab = "search" | "criteria" | "changes";
 
 const TABS: { id: ActiveTab; label: string; icon: ReactNode }[] = [
-  { id: "search", label: "Coverage Search", icon: <Search className="w-4 h-4" aria-hidden="true" /> },
-  { id: "criteria", label: "Criteria Lookup", icon: <ClipboardList className="w-4 h-4" aria-hidden="true" /> },
-  { id: "changes", label: "Policy Changes", icon: <History className="w-4 h-4" aria-hidden="true" /> },
+  {
+    id: "search",
+    label: "Coverage Search",
+    icon: <Search className="w-4 h-4" aria-hidden="true" />,
+  },
+  {
+    id: "criteria",
+    label: "Criteria Lookup",
+    icon: <ClipboardList className="w-4 h-4" aria-hidden="true" />,
+  },
+  {
+    id: "changes",
+    label: "Policy Changes",
+    icon: <History className="w-4 h-4" aria-hidden="true" />,
+  },
 ];
 
 export default function App() {
@@ -25,21 +44,35 @@ export default function App() {
 
   // ── Coverage Search state ──
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedPayers, setSelectedPayers] = useState<Set<string>>(new Set(PAYERS));
+  const [selectedPayers, setSelectedPayers] = useState<Set<string>>(
+    new Set(PAYERS),
+  );
   const [selectedDiagnosis, setSelectedDiagnosis] = useState("");
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [compareIds, setCompareIds] = useState<Set<string>>(new Set());
+  const [showUpload, setShowUpload] = useState(true);
+
+  if (showUpload) {
+    return <UploadPage onContinue={() => setShowUpload(false)} />;
+  }
 
   const filteredPlans = useMemo(() => {
     return MOCK_PLANS.filter((p) => {
-      if (searchQuery && !p.drugName.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+      if (
+        searchQuery &&
+        !p.drugName.toLowerCase().includes(searchQuery.toLowerCase())
+      )
+        return false;
       if (!selectedPayers.has(p.payer)) return false;
-      if (selectedDiagnosis && !p.diagnosisCodes.includes(selectedDiagnosis)) return false;
+      if (selectedDiagnosis && !p.diagnosisCodes.includes(selectedDiagnosis))
+        return false;
       return true;
     });
   }, [searchQuery, selectedPayers, selectedDiagnosis]);
 
-  const selectedPlan = selectedCardId ? MOCK_PLANS.find((p) => p.id === selectedCardId) : null;
+  const selectedPlan = selectedCardId
+    ? MOCK_PLANS.find((p) => p.id === selectedCardId)
+    : null;
   const comparePlans = MOCK_PLANS.filter((p) => compareIds.has(p.id));
   const isCompareMode = comparePlans.length >= 2;
 
@@ -67,26 +100,43 @@ export default function App() {
 
   const stats = {
     total: filteredPlans.length,
-    preferred: filteredPlans.filter((p) => p.coverageStatus === "Preferred").length,
-    paRequired: filteredPlans.filter((p) => p.coverageStatus === "Prior Auth Required").length,
+    preferred: filteredPlans.filter((p) => p.coverageStatus === "Preferred")
+      .length,
+    paRequired: filteredPlans.filter(
+      (p) => p.coverageStatus === "Prior Auth Required",
+    ).length,
   };
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
+    <div
+      className="min-h-screen flex flex-col"
+      style={{
+        background:
+          "linear-gradient(135deg, #f0f7f5 0%, #e8f4f8 50%, #f0f0fa 100%)",
+      }}
+    >
       {/* WCAG: Skip to main content link */}
       <a href="#main-content" className="skip-link">
         Skip to main content
       </a>
 
       {/* ── Header with professional branding ── */}
-      <header className="border-b border-border bg-card sticky top-0 z-20" role="banner">
+      <header
+        className="border-b border-border bg-card sticky top-0 z-20"
+        role="banner"
+      >
         <div className="max-w-7xl mx-auto px-4 py-4 flex items-center gap-3">
           <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-primary">
-            <Pill className="w-5 h-5 text-primary-foreground" aria-hidden="true" />
+            <Pill
+              className="w-5 h-5 text-primary-foreground"
+              aria-hidden="true"
+            />
           </div>
           <div>
             <h1 className="leading-tight">CoverMyPharma</h1>
-            <p className="text-sm text-muted-foreground mb-0">Medical Benefit Drug Policy Tracker</p>
+            <p className="text-sm text-muted-foreground mb-0">
+              Medical Benefit Drug Policy Tracker
+            </p>
           </div>
         </div>
 
@@ -127,18 +177,26 @@ export default function App() {
           <div className="max-w-7xl mx-auto px-4 py-6">
             <h2 className="mt-0 mb-1">Coverage Search</h2>
             <p className="text-sm text-muted-foreground mb-5">
-              Search by drug name to discover which plans cover it and view coverage details.
+              Search by drug name to discover which plans cover it and view
+              coverage details.
             </p>
 
             {/* Filters */}
-            <form onSubmit={handleSearch} className="flex flex-col lg:flex-row gap-4 mb-6" aria-label="Coverage search filters">
+            <form
+              onSubmit={handleSearch}
+              className="flex flex-col lg:flex-row gap-4 mb-6"
+              aria-label="Coverage search filters"
+            >
               {/* Search */}
               <div className="flex-1 max-w-md">
                 <label htmlFor="drug-search" className="block text-sm mb-1.5">
                   Drug Name
                 </label>
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" aria-hidden="true" />
+                  <Search
+                    className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground"
+                    aria-hidden="true"
+                  />
                   <input
                     id="drug-search"
                     type="search"
@@ -149,14 +207,19 @@ export default function App() {
                     aria-describedby="search-hint"
                   />
                 </div>
-                <span id="search-hint" className="sr-only">Type a drug name to filter the plan cards below</span>
+                <span id="search-hint" className="sr-only">
+                  Type a drug name to filter the plan cards below
+                </span>
               </div>
 
               {/* Payer checkboxes */}
               <fieldset className="flex items-end gap-4">
                 <legend className="text-sm mb-1.5">Payers</legend>
                 {PAYERS.map((payer) => (
-                  <label key={payer} className="flex items-center gap-2 cursor-pointer min-h-[44px] px-1">
+                  <label
+                    key={payer}
+                    className="flex items-center gap-2 cursor-pointer min-h-[44px] px-1"
+                  >
                     <input
                       type="checkbox"
                       checked={selectedPayers.has(payer)}
@@ -181,7 +244,9 @@ export default function App() {
                 >
                   <option value="">All Diagnoses</option>
                   {DIAGNOSIS_OPTIONS.map((d) => (
-                    <option key={d.value} value={d.value}>{d.label}</option>
+                    <option key={d.value} value={d.value}>
+                      {d.label}
+                    </option>
                   ))}
                 </select>
               </div>
@@ -199,8 +264,14 @@ export default function App() {
             </form>
 
             {/* Stats bar */}
-            <div className="flex items-center gap-6 mb-5 text-sm text-muted-foreground" role="status" aria-live="polite">
-              <span>{stats.total} plan{stats.total !== 1 ? "s" : ""} found</span>
+            <div
+              className="flex items-center gap-6 mb-5 text-sm text-muted-foreground"
+              role="status"
+              aria-live="polite"
+            >
+              <span>
+                {stats.total} plan{stats.total !== 1 ? "s" : ""} found
+              </span>
               <span className="inline-flex items-center gap-1.5 text-emerald-800">
                 <CheckCircle className="w-4 h-4" aria-hidden="true" />
                 {stats.preferred} Preferred
@@ -213,7 +284,11 @@ export default function App() {
                 <span className="ml-auto flex items-center gap-2 text-primary">
                   <GitCompareArrows className="w-4 h-4" aria-hidden="true" />
                   {compareIds.size} selected for comparison
-                  {compareIds.size >= 2 && <span className="text-sm bg-primary text-primary-foreground px-2 py-0.5 rounded-full">Diff Active</span>}
+                  {compareIds.size >= 2 && (
+                    <span className="text-sm bg-primary text-primary-foreground px-2 py-0.5 rounded-full">
+                      Diff Active
+                    </span>
+                  )}
                   <button
                     onClick={() => setCompareIds(new Set())}
                     className="text-sm underline text-muted-foreground ml-1 min-h-[44px] min-w-[44px] flex items-center justify-center"
@@ -227,15 +302,25 @@ export default function App() {
 
             {/* Results heading */}
             <h3 className="mt-0 mb-4">
-              {searchQuery ? `Results for "${searchQuery}"` : "All Indexed Plans"}
+              {searchQuery
+                ? `Results for "${searchQuery}"`
+                : "All Indexed Plans"}
             </h3>
 
             {/* Cards grid */}
             {filteredPlans.length === 0 ? (
-              <div className="text-center py-16 text-muted-foreground" role="status">
-                <LayoutGrid className="w-10 h-10 mx-auto mb-3 opacity-40" aria-hidden="true" />
+              <div
+                className="text-center py-16 text-muted-foreground"
+                role="status"
+              >
+                <LayoutGrid
+                  className="w-10 h-10 mx-auto mb-3 opacity-40"
+                  aria-hidden="true"
+                />
                 <p>No plans match your filters</p>
-                <p className="text-sm mt-1">Try adjusting your search or filter criteria</p>
+                <p className="text-sm mt-1">
+                  Try adjusting your search or filter criteria
+                </p>
               </div>
             ) : (
               <div
@@ -249,7 +334,9 @@ export default function App() {
                       plan={plan}
                       isSelected={selectedCardId === plan.id}
                       isCompareChecked={compareIds.has(plan.id)}
-                      onSelect={(id) => setSelectedCardId(selectedCardId === id ? null : id)}
+                      onSelect={(id) =>
+                        setSelectedCardId(selectedCardId === id ? null : id)
+                      }
                       onCompareToggle={toggleCompare}
                     />
                   </div>
@@ -260,9 +347,15 @@ export default function App() {
 
           {/* Bottom panels */}
           {isCompareMode ? (
-            <ComparisonPanel plans={comparePlans} onClose={() => setCompareIds(new Set())} />
+            <ComparisonPanel
+              plans={comparePlans}
+              onClose={() => setCompareIds(new Set())}
+            />
           ) : selectedPlan ? (
-            <DetailPanel plan={selectedPlan} onClose={() => setSelectedCardId(null)} />
+            <DetailPanel
+              plan={selectedPlan}
+              onClose={() => setSelectedCardId(null)}
+            />
           ) : null}
         </div>
 
