@@ -1,0 +1,12 @@
+{
+  "name": "covermypharma-repo",
+  "private": true,
+  "description": "Run npm scripts from repo root; the Vite app lives in ./CoverMyPharma",
+  "scripts": {
+    "dev": "npm run dev --prefix ./CoverMyPharma",
+    "build": "npm run build --prefix ./CoverMyPharma",
+    "lint": "npm run lint --prefix ./CoverMyPharma",
+    "preview": "npm run preview --prefix ./CoverMyPharma",
+    "install:app": "npm install --prefix ./CoverMyPharma"
+  }
+}
