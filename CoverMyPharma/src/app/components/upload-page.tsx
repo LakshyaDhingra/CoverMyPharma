@@ -10,6 +10,8 @@ import {
   TrendingUp,
   ChevronRight,
 } from "lucide-react";
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import { useAuth0 } from "@auth0/auth0-react";
 
 import logo from "@/assets/CoverMyPharma.svg";
 import symbol from "@/assets/CoverMyPharmaSymbol.svg";
@@ -29,6 +31,8 @@ interface UploadPageProps {
   onContinue: () => void;
 }
 
+const genAI = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY);
+
 const FEATURES = [
   {
     icon: <Zap className="w-4 h-4" />,
@@ -47,31 +51,52 @@ const FEATURES = [
   },
 ];
 
-const SAMPLE_DRUGS = ["Keytruda", "Humira", "Dupixent", "Ocrevus", "Stelara"];
-
 function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+async function parsePDF(
+  file: File,
+  id: string,
+  setFiles: React.Dispatch<React.SetStateAction<UploadedFile[]>>,
+) {
+  setFiles((prev) =>
+    prev.map((f) => (f.id === id ? { ...f, status: "processing" } : f)),
+  );
+  try {
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const fileData = await file.arrayBuffer();
+    const filePart = {
+      inlineData: {
+        data: btoa(String.fromCharCode(...new Uint8Array(fileData))),
+        mimeType: file.type,
+      },
+    };
+    const result = await model.generateContent([
+      "Extract the coverage rules, PA criteria, and diagnosis codes from this PDF.",
+      filePart,
+    ]);
+    const text = result.response.text();
+    console.log("Parsed text:", text);
+    // Store parsed data if needed
+    setFiles((prev) =>
+      prev.map((f) => (f.id === id ? { ...f, status: "done" } : f)),
+    );
+  } catch (error) {
+    console.error("Error parsing PDF:", error);
+    setFiles((prev) =>
+      prev.map((f) => (f.id === id ? { ...f, status: "error" } : f)),
+    );
+  }
+}
+
 export default function UploadPage({ onContinue }: UploadPageProps) {
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-
-  const simulateProcessing = (id: string) => {
-    setTimeout(() => {
-      setFiles((prev) =>
-        prev.map((f) => (f.id === id ? { ...f, status: "processing" } : f)),
-      );
-      setTimeout(() => {
-        setFiles((prev) =>
-          prev.map((f) => (f.id === id ? { ...f, status: "done" } : f)),
-        );
-      }, 2000);
-    }, 1000);
-  };
+  const { loginWithRedirect, logout, user, isAuthenticated } = useAuth0();
 
   const addFiles = (incoming: FileList | null) => {
     if (!incoming) return;
@@ -84,7 +109,7 @@ export default function UploadPage({ onContinue }: UploadPageProps) {
         status: "uploading",
       };
       setFiles((prev) => [...prev, newFile]);
-      simulateProcessing(newFile.id);
+      parsePDF(f, newFile.id, setFiles);
     });
   };
 
@@ -103,34 +128,62 @@ export default function UploadPage({ onContinue }: UploadPageProps) {
   return (
     <div
       className="min-h-screen flex flex-col"
-      style={{ background: "#f5f6f8" }}
+      style={{
+        background: "#5b8db8",
+      }}
     >
       {/* ── Top nav ── */}
-      <header className="flex items-center justify-between px-8 py-2 bg-white border-b border-gray-100">
+      <header className="flex items-center justify-between px-8 py-4 bg-transparent border-b border-white/20 shadow-lg transition-all duration-300">
         <div className="flex items-center gap-3">
-          <img src={symbol} alt="CoverMyPharma" className="h-30 w-auto" />
+          <img
+            src={symbol}
+            alt="CoverMyPharma"
+            className="h-20 w-auto cursor-pointer hover:scale-105 transition-transform duration-200"
+            style={{ filter: "brightness(0) invert(1)" }}
+            onClick={() => (window.location.href = "/")}
+          />
         </div>
 
-        <div className="flex items-center gap-2">
-          <button
-            className="text-sm px-4 py-2 rounded-lg hover:bg-gray-100 transition-colors"
-            style={{ color: "#3d3d3d" }}
-          >
-            Sign in
-          </button>
-          <button
-            className="text-sm font-medium px-4 py-2 rounded-lg text-white hover:opacity-90 transition-opacity"
-            style={{ background: "#3d3d3d" }}
-          >
-            Get started
-          </button>
+        <div className="flex items-center gap-3">
+          {isAuthenticated ? (
+            <>
+              <span className="text-sm text-white">Hello, {user?.name}</span>
+              <button
+                onClick={() =>
+                  logout({ logoutParams: { returnTo: window.location.origin } })
+                }
+                className="text-sm px-4 py-2 rounded-lg hover:bg-white/20 transition-all duration-200 hover:shadow-md text-white"
+              >
+                Log out
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={() => loginWithRedirect()}
+                className="text-sm px-4 py-2 rounded-lg hover:bg-white/20 transition-all duration-200 hover:shadow-md text-white"
+              >
+                Sign in
+              </button>
+              <button
+                className="text-sm font-medium px-4 py-2 rounded-lg text-white hover:opacity-90 transition-all duration-200 hover:shadow-md"
+                style={{
+                  background: "#3d3d3d",
+                }}
+              >
+                Get started
+              </button>
+            </>
+          )}
         </div>
       </header>
 
       {/* ── Dark hero band ── */}
       <div
         className="w-full py-16 px-8 text-center"
-        style={{ background: "#3d3d3d" }}
+        style={{
+          background: "linear-gradient(135deg, #2c3e50 0%, #34495e 100%)",
+        }}
       >
         <img
           src={logo}
@@ -156,7 +209,7 @@ export default function UploadPage({ onContinue }: UploadPageProps) {
       {/* ── Upload + features ── */}
       <main className="flex-1 max-w-5xl mx-auto w-full px-6 py-12 grid grid-cols-1 lg:grid-cols-2 gap-10 items-start">
         {/* Upload card */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-8">
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-lg p-8 hover:shadow-xl transition-shadow duration-300">
           <h2
             className="text-lg font-semibold mb-1"
             style={{ color: "#3d3d3d" }}
