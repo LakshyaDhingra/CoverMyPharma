@@ -21,7 +21,10 @@ Analyze the following insurance or pharmacy-related document text and extract:
 1. patient_name
 2. medication_name
 3. diagnosis
-4. insurance_provider
+4. insurance_provider — short string only: the payer, plan, or insurer name **as printed in the document** (e.g. a company name or a clear plan name).
+   - Do NOT add explanations in parentheses such as "(unspecified name)", "(generic name, no specific provider name provided)", "(unknown)", "(not specified)", or "(unspecified)". Never invent qualifiers.
+   - If the document only shows a segment label like "Health Plan" or "Commercial" with no separate legal entity name, use that label alone with no extra text.
+   - Use common short brand names when obvious (e.g. "Cigna" not "Cigna Companies") when the document uses a legal-entity style name.
 5. prior_auth_required (boolean true/false)
 6. summary
 7. missing_information

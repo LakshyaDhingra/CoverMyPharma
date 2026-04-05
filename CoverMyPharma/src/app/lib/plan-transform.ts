@@ -46,6 +46,54 @@ function normalizeText(value: unknown, fallback = "") {
   return parts.length > 0 ? parts.join("; ") : fallback;
 }
 
+/** True when trailing "(...)" looks like a model explanation, not a real plan name. */
+function isExplanatoryPayerParenthetical(inner: string): boolean {
+  const t = inner.trim().toLowerCase();
+  if (!t) return false;
+  if (/^(unspecified(\s+name)?|unknown|not\s+specified|n\/a)\b/.test(t)) {
+    return true;
+  }
+  if (t.includes("generic name") && t.includes("provider")) return true;
+  if (t.includes("no specific provider")) return true;
+  if (t.includes("not provided") && t.includes("provider")) return true;
+  return false;
+}
+
+/** Strip model-invented parentheticals (e.g. "Health Plan (unspecified name)"). */
+function sanitizePayerDisplay(raw: string): string {
+  let s = raw.trim().replace(/\s+/g, " ");
+  if (!s) return "";
+  let prev: string;
+  do {
+    prev = s;
+    const m = s.match(/^(.*?)\s*\(([^)]+)\)\s*$/);
+    if (m && isExplanatoryPayerParenthetical(m[2]!)) {
+      s = m[1]!.trim();
+      continue;
+    }
+    const junkSuffix =
+      /\s*\((?:unspecified\s+name|unspecified|unknown|not\s+specified|n\/a)\)\s*$/i;
+    s = s.replace(junkSuffix, "").trim();
+  } while (s !== prev);
+  return s;
+}
+
+/** Shorten legal-style suffixes on payer names (e.g. "Cigna Companies" -> "Cigna"). */
+function normalizePayerBrand(s: string): string {
+  let t = s.trim().replace(/\s+/g, " ");
+  if (!t) return "";
+  t = t.replace(/\s+Companies\s*$/i, "").trim();
+  t = t.replace(/\s+Company\s*$/i, "").trim();
+  return t;
+}
+
+const DEFAULT_PAYER_LABEL = "Health Plan";
+
+function formatPayerForDisplay(raw: string): string {
+  const cleaned = normalizePayerBrand(sanitizePayerDisplay(raw));
+  return cleaned || DEFAULT_PAYER_LABEL;
+}
+
 /**
  * Reduce verbose parser/PDF medication strings to a recognizable brand/common name.
  */
@@ -149,8 +197,10 @@ export function normalizePolicyChangesRaw(
     }
     if (!quarter) quarter = "Unknown";
 
-    const payer =
-      normalizeText(o.payer, "").trim() || opts.defaultPayer;
+    const rowPayer = normalizeText(o.payer, "").trim();
+    const payer = rowPayer
+      ? normalizePayerBrand(sanitizePayerDisplay(rowPayer)) || opts.defaultPayer
+      : opts.defaultPayer;
     const drugNameRaw =
       normalizeText(o.drug_name ?? o.drugName, "").trim() ||
       opts.defaultDrug;
@@ -218,8 +268,9 @@ export function transformBackendResponse(
   }
   const drugName = shortenMedicationName(drugNameRaw);
 
-  const payer =
-    normalizeText(a.insurance_provider) || "Insurance (unspecified)";
+  const payer = formatPayerForDisplay(
+    normalizeText(a.insurance_provider).trim(),
+  );
   const conditions = normalizeText(a.diagnosis);
   const summary = normalizeText(a.summary);
   const genericNameRaw = normalizeText(a.generic_name);
@@ -227,7 +278,8 @@ export function transformBackendResponse(
     ? shortenMedicationName(genericNameRaw)
     : "";
   const id = options?.planId ?? crypto.randomUUID();
-  const documentId = options?.documentId ?? options?.planId;
+  /** Always set so session uploads (no Supabase row) still show delete; matches DB id when persisted. */
+  const documentId = options?.documentId ?? options?.planId ?? id;
   const diagnosisText = [conditions, summary].filter(Boolean).join(" ");
   const codesFromText = extractIcdCodes(diagnosisText);
 

@@ -60,8 +60,133 @@ const diagnosisLabels = new Map(
   DIAGNOSIS_OPTIONS.map((option) => [option.value, option.label]),
 );
 
+const SESSION_OWNER_KEY = "cmp_session_owner";
+const SESSION_UPLOADED_PLANS_KEY = "cmp_uploaded_plans";
+const SESSION_SHOW_UPLOAD_KEY = "cmp_show_upload";
+
+function isPlanCardLike(value: unknown): value is PlanCard {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const plan = value as Partial<PlanCard>;
+  return (
+    typeof plan.id === "string" &&
+    typeof plan.payer === "string" &&
+    typeof plan.drugName === "string" &&
+    typeof plan.rxNormCode === "string" &&
+    typeof plan.coverageStatus === "string" &&
+    typeof plan.effectiveDate === "string" &&
+    Array.isArray(plan.diagnosisCodes) &&
+    !!plan.criteria &&
+    typeof plan.criteria === "object"
+  );
+}
+
+function hasMatchingSessionOwner(ownerId: string) {
+  try {
+    return sessionStorage.getItem(SESSION_OWNER_KEY) === ownerId;
+  } catch {
+    return false;
+  }
+}
+
+function loadSessionUploadedPlans(ownerId: string): PlanCard[] {
+  try {
+    if (!hasMatchingSessionOwner(ownerId)) {
+      return [];
+    }
+
+    const raw = sessionStorage.getItem(SESSION_UPLOADED_PLANS_KEY);
+    if (!raw) {
+      return [];
+    }
+
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.filter((plan): plan is PlanCard => isPlanCardLike(plan));
+  } catch {
+    return [];
+  }
+}
+
+function loadStoredShowUpload(ownerId: string) {
+  try {
+    if (!hasMatchingSessionOwner(ownerId)) {
+      return true;
+    }
+
+    return sessionStorage.getItem(SESSION_SHOW_UPLOAD_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function persistSessionOwner(ownerId: string) {
+  try {
+    sessionStorage.setItem(SESSION_OWNER_KEY, ownerId);
+  } catch {
+    /* sessionStorage unavailable */
+  }
+}
+
+function persistSessionUploadedPlans(plans: PlanCard[], ownerId: string) {
+  try {
+    persistSessionOwner(ownerId);
+    sessionStorage.setItem(SESSION_UPLOADED_PLANS_KEY, JSON.stringify(plans));
+  } catch {
+    /* sessionStorage unavailable */
+  }
+}
+
+function persistShowUploadState(showUpload: boolean, ownerId: string) {
+  try {
+    persistSessionOwner(ownerId);
+    sessionStorage.setItem(SESSION_SHOW_UPLOAD_KEY, showUpload ? "1" : "0");
+  } catch {
+    /* sessionStorage unavailable */
+  }
+}
+
+function clearStoredSessionState() {
+  try {
+    sessionStorage.removeItem(SESSION_OWNER_KEY);
+    sessionStorage.removeItem(SESSION_UPLOADED_PLANS_KEY);
+    sessionStorage.removeItem(SESSION_SHOW_UPLOAD_KEY);
+  } catch {
+    /* sessionStorage unavailable */
+  }
+}
+
+function getPlanIdentity(plan: PlanCard) {
+  return plan.documentId ?? plan.id;
+}
+
+function mergeRealPlans(uploadedPlans: PlanCard[], savedPlans: PlanCard[]) {
+  const merged = new Map<string, PlanCard>();
+
+  uploadedPlans.forEach((plan) => {
+    merged.set(getPlanIdentity(plan), plan);
+  });
+
+  savedPlans.forEach((plan) => {
+    merged.set(getPlanIdentity(plan), plan);
+  });
+
+  return [...merged.values()];
+}
+
 export default function App() {
-  const { isAuthenticated, loginWithRedirect, logout, user } = useAuth0();
+  const {
+    isAuthenticated,
+    isLoading: authLoading,
+    loginWithRedirect,
+    logout,
+    user,
+  } = useAuth0();
   const [activeTab, setActiveTab] = useState<ActiveTab>("search");
   const [uploadedPlans, setUploadedPlans] = useState<PlanCard[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
@@ -71,28 +196,64 @@ export default function App() {
   const [selectedVoiceId, setSelectedVoiceId] = useState(VOICE_OPTIONS[0].id);
   const [selectedPlaybackRate, setSelectedPlaybackRate] = useState(1);
   const [showUpload, setShowUpload] = useState(true);
+  const [isSessionHydrated, setIsSessionHydrated] = useState(false);
   const {
     plans: savedPlans,
     isLoading: isSavedPlansLoading,
     error: savedPlansError,
     reload: reloadSavedPlans,
   } = useSavedPlans();
+  const sessionOwnerId = user?.sub ?? null;
 
-  const activePlans = useMemo(
-    () =>
-      uploadedPlans.length > 0 || savedPlans.length > 0
-        ? [...uploadedPlans, ...savedPlans]
-        : MOCK_PLANS,
+  useEffect(() => {
+    if (authLoading) {
+      return;
+    }
+
+    if (!isAuthenticated || !sessionOwnerId) {
+      setUploadedPlans([]);
+      setShowUpload(true);
+      clearStoredSessionState();
+      setIsSessionHydrated(true);
+      return;
+    }
+
+    setUploadedPlans(loadSessionUploadedPlans(sessionOwnerId));
+    setShowUpload(loadStoredShowUpload(sessionOwnerId));
+    setIsSessionHydrated(true);
+  }, [authLoading, isAuthenticated, sessionOwnerId]);
+
+  useEffect(() => {
+    if (!isSessionHydrated || !isAuthenticated || !sessionOwnerId) {
+      return;
+    }
+
+    persistSessionUploadedPlans(uploadedPlans, sessionOwnerId);
+  }, [isAuthenticated, isSessionHydrated, sessionOwnerId, uploadedPlans]);
+
+  useEffect(() => {
+    if (!isSessionHydrated || !isAuthenticated || !sessionOwnerId) {
+      return;
+    }
+
+    persistShowUploadState(showUpload, sessionOwnerId);
+  }, [isAuthenticated, isSessionHydrated, sessionOwnerId, showUpload]);
+
+  const realPlans = useMemo(
+    () => mergeRealPlans(uploadedPlans, savedPlans),
     [uploadedPlans, savedPlans],
   );
-  const hasRealPlans = uploadedPlans.length > 0 || savedPlans.length > 0;
+
+  const activePlans = useMemo(
+    () => (realPlans.length > 0 ? realPlans : MOCK_PLANS),
+    [realPlans],
+  );
+  const hasRealPlans = realPlans.length > 0;
 
   const aggregatedPolicyChanges = useMemo((): PolicyChange[] => {
     if (!hasRealPlans) return [];
-    return [...uploadedPlans, ...savedPlans].flatMap(
-      (p) => p.policyChanges ?? [],
-    );
-  }, [hasRealPlans, uploadedPlans, savedPlans]);
+    return realPlans.flatMap((plan) => plan.policyChanges ?? []);
+  }, [hasRealPlans, realPlans]);
 
   const availablePayers = useMemo(
     () => [...new Set(activePlans.map((plan) => plan.payer))],
@@ -508,7 +669,7 @@ export default function App() {
                   ? "Uploaded Policy Analyses"
                   : "All Indexed Plans"}
             </h3>
-            {isSavedPlansLoading && !uploadedPlans.length && (
+            {isSavedPlansLoading && !realPlans.length && (
               <p className="text-sm text-muted-foreground mb-4" role="status">
                 Loading saved policy records from Supabase...
               </p>
@@ -581,11 +742,7 @@ export default function App() {
               onVoiceChange={setSelectedVoiceId}
               playbackRate={selectedPlaybackRate}
               onPlaybackRateChange={setSelectedPlaybackRate}
-              onDeleteDocument={
-                selectedPlan.documentId
-                  ? handleDeleteDocument
-                  : undefined
-              }
+              onDeleteDocument={handleDeleteDocument}
             />
           ) : null}
         </div>

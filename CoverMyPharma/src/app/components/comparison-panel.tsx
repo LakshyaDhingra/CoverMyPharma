@@ -276,11 +276,11 @@ export function ComparisonPanel({
                         <button
                           type="button"
                           onClick={() => setDeleteTarget(plan)}
-                          className="inline-flex items-center gap-2 px-3 py-2 min-h-[44px] rounded-lg border border-destructive/50 text-destructive hover:bg-destructive/10 transition-colors text-sm"
+                          className="inline-flex items-center justify-center min-h-[44px] min-w-[44px] rounded-lg border border-destructive/50 text-destructive hover:bg-destructive/10 transition-colors"
                           aria-label={`Delete ${formatPlanDrugHeading(plan)} document`}
+                          title={`Delete ${formatPlanDrugHeading(plan)} document`}
                         >
                           <Trash2 className="w-4 h-4 shrink-0" aria-hidden="true" />
-                          Delete
                         </button>
                       </div>
                     ) : null}
