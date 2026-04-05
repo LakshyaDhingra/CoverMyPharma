@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { useAuth0 } from "@auth0/auth0-react";
 import type { ParsePdfResponse } from "@/app/lib/plan-transform";
+import { backendUrl } from "@/lib/api-base";
 import { hasSupabaseConfig, supabase } from "@/lib/supabase";
 import { useSupabaseUser } from "@/hooks/useSupabaseUser";
 
@@ -170,16 +171,13 @@ export default function UploadPage({
         const formData = new FormData();
         formData.append("file", file);
 
-        const res = await fetch(
-          `${import.meta.env.VITE_API_BASE_URL}/api/parse-pdf`,
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${token}`,
-            },
-            body: formData,
+        const res = await fetch(backendUrl("/api/parse-pdf"), {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
           },
-        );
+          body: formData,
+        });
 
         const data = (await res.json()) as ParsePdfResponse & {
           detail?: string;
