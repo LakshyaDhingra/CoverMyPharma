@@ -18,6 +18,8 @@ import {
 } from "lucide-react";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { useAuth0 } from "@auth0/auth0-react";
+import { supabase } from "@/lib/supabase";
+import { useSupabaseUser } from "@/hooks/useSupabaseUser";
 
 import logo from "@/assets/CoverMyPharma.svg";
 import symbol from "@/assets/CoverMyPharmaSymbol.svg";
@@ -84,6 +86,9 @@ export default function UploadPage({ onContinue }: UploadPageProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const processingRef = useRef<Set<string>>(new Set());
   const { loginWithRedirect, logout, user, isAuthenticated } = useAuth0();
+
+  // Sync user with Supabase
+  useSupabaseUser();
 
   const handlePdfProcessing = useCallback(
     async (file: File, fileId: string) => {
@@ -166,25 +171,64 @@ Set isValid to true only if ALL required fields are present and contain meaningf
 
           // Parse the JSON response
           const parsed = JSON.parse(jsonText);
+          const missing = parsed.validation?.missingFields || ["unknown fields"];
+          const friendlyFields = missing.map(normalizeMissingField);
+          const validationErrorMessage = parsed.validation?.isValid
+            ? null
+            : `PDF validation failed. Missing required fields: ${friendlyFields.join(", ")}. Please upload a complete pharmaceutical coverage/policy document.`;
 
-          if (!parsed.validation?.isValid) {
-            const missing = parsed.validation?.missingFields || [
-              "unknown fields",
-            ];
-            const friendlyFields = missing.map(normalizeMissingField);
-            throw new Error(
-              `PDF validation failed. Missing required fields: ${friendlyFields.join(", ")}. Please upload a complete pharmaceutical coverage/policy document.`,
-            );
+          if (!user?.sub) {
+            throw new Error("Authenticated user is not available");
+          }
+
+          const { data: userData, error: userError } = await supabase
+            .from("users")
+            .upsert(
+              {
+                auth0_id: user.sub,
+                email: user.email ?? "",
+                name: user.name ?? null,
+              },
+              { onConflict: "auth0_id" },
+            )
+            .select()
+            .single();
+
+          if (userError) throw userError;
+
+          const { error: docError } = await supabase
+            .from("medical_documents")
+            .insert({
+              user_id: userData.id,
+              filename: file.name,
+              file_size: file.size,
+              drug_name: parsed.data?.drugName || null,
+              conditions: parsed.data?.conditions || null,
+              prior_auth_required: parsed.data?.priorAuthRequired || null,
+              clinical_criteria: parsed.data?.clinicalCriteria || null,
+              diagnosis_codes: parsed.data?.diagnosisCodes || null,
+              effective_date: parsed.data?.effectiveDate || null,
+              raw_extracted_data: parsed,
+            });
+
+          if (docError) throw docError;
+
+          console.log("✓ Data saved to database");
+
+          if (validationErrorMessage) {
+            throw new Error(validationErrorMessage);
           }
 
           console.log("✓ PDF validated and parsed successfully");
           setFiles((prev) =>
             prev.map((f) => (f.id === fileId ? { ...f, status: "done" } : f)),
           );
-        } catch (parseErr) {
-          console.error("✗ PDF validation failed:", parseErr);
+        } catch (workflowErr) {
+          console.error("✗ PDF processing workflow failed:", workflowErr);
           const errorMessage =
-            parseErr instanceof Error ? parseErr.message : String(parseErr);
+            workflowErr instanceof Error
+              ? workflowErr.message
+              : String(workflowErr);
 
           setFiles((prev) =>
             prev.map((f) =>
@@ -201,7 +245,7 @@ Set isValid to true only if ALL required fields are present and contain meaningf
         processingRef.current.delete(fileId);
       }
     },
-    [],
+    [user],
   );
 
   const addFiles = useCallback(
