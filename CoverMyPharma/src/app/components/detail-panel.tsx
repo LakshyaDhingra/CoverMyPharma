@@ -52,7 +52,6 @@ export function DetailPanel({
       role="region"
     >
       <div className="p-6 max-w-5xl mx-auto">
-        {/* Header */}
         <div className="flex items-start justify-between mb-5">
           <div>
             <div className="flex items-center gap-3 flex-wrap">
@@ -103,7 +102,6 @@ export function DetailPanel({
           </div>
         </div>
 
-        {/* Clinical Criteria Grid */}
         <h3 className="mb-3 mt-0">Clinical Criteria</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <CriteriaItem icon={<Clock className="w-4 h-4" />} label="Trial Duration" value={c.trialDuration} />
@@ -114,7 +112,6 @@ export function DetailPanel({
           <CriteriaItem icon={<StickyNote className="w-4 h-4" />} label="Additional Notes" value={c.additionalNotes} className="md:col-span-2" />
         </div>
 
-        {/* Source section */}
         <div className="mt-5">
           <button
             onClick={() => setShowSource(!showSource)}
