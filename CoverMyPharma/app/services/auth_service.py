@@ -7,8 +7,8 @@ from fastapi import HTTPException
 load_dotenv()
 
 def verify_token(token: str):
-    auth0_domain = os.getenv("AUTH0_DOMAIN")
-    auth0_audience = os.getenv("AUTH0_AUDIENCE")
+    auth0_domain = os.getenv("AUTH0_DOMAIN") or os.getenv("VITE_AUTH0_DOMAIN")
+    auth0_audience = os.getenv("AUTH0_AUDIENCE") or os.getenv("VITE_AUTH0_AUDIENCE")
 
     if not auth0_domain or not auth0_audience:
         raise HTTPException(status_code=500, detail="Auth0 environment variables missing")

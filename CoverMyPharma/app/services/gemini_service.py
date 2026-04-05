@@ -6,7 +6,7 @@ import google.generativeai as genai
 load_dotenv()
 
 def analyze_document(text: str):
-    gemini_api_key = os.getenv("GEMINI_API_KEY")
+    gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("VITE_GEMINI_API_KEY")
 
     if not gemini_api_key:
         raise ValueError("Missing GEMINI_API_KEY")
