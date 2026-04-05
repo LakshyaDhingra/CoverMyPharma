@@ -34,8 +34,17 @@ export function getApiBaseUrl() {
   return import.meta.env.DEV ? "http://localhost:3001" : "";
 }
 
+export function getTtsApiBaseUrl() {
+  const configuredTtsBaseUrl = import.meta.env.VITE_TTS_API_BASE_URL?.trim();
+  if (configuredTtsBaseUrl) {
+    return configuredTtsBaseUrl.replace(/\/$/, "");
+  }
+
+  return import.meta.env.DEV ? "http://localhost:3001" : getApiBaseUrl();
+}
+
 export async function generateSpeechAudio(text: string, voiceId?: string) {
-  const response = await fetch(`${getApiBaseUrl()}/api/tts`, {
+  const response = await fetch(`${getTtsApiBaseUrl()}/api/tts`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

@@ -1,4 +1,10 @@
-import { useState, useMemo, type FormEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import {
   Search,
   GitCompareArrows,
@@ -9,7 +15,12 @@ import {
   ClipboardList,
   History,
 } from "lucide-react";
-import { MOCK_PLANS, DIAGNOSIS_OPTIONS } from "./components/mock-data";
+import {
+  MOCK_PLANS,
+  DIAGNOSIS_OPTIONS,
+  type CoverageStatus,
+  type PlanCard,
+} from "./components/mock-data";
 import { PlanSnapshotCard } from "./components/plan-card";
 import { DetailPanel } from "./components/detail-panel";
 import { ComparisonPanel } from "./components/comparison-panel";
@@ -18,9 +29,24 @@ import { PolicyChanges } from "./components/policy-changes";
 import { VOICE_OPTIONS } from "./components/tts";
 import UploadPage from "./components/upload-page";
 
-const PAYERS = ["Aetna", "UHC", "Cigna"] as const;
-
 type ActiveTab = "search" | "criteria" | "changes";
+
+interface UploadedAnalysis {
+  patient_name?: unknown;
+  medication_name?: unknown;
+  diagnosis?: unknown;
+  insurance_provider?: unknown;
+  prior_auth_required?: boolean;
+  summary?: unknown;
+  missing_information?: unknown;
+  recommended_next_steps?: unknown;
+}
+
+interface ParsePdfResponse {
+  success?: boolean;
+  extracted_text?: unknown;
+  analysis?: UploadedAnalysis;
+}
 
 const TABS: { id: ActiveTab; label: string; icon: ReactNode }[] = [
   {
@@ -40,39 +66,210 @@ const TABS: { id: ActiveTab; label: string; icon: ReactNode }[] = [
   },
 ];
 
+const diagnosisLabels = new Map(
+  DIAGNOSIS_OPTIONS.map((option) => [option.value, option.label]),
+);
+
+function truncateText(text: string, maxLength = 240) {
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength).trimEnd()}...`;
+}
+
+function flattenToStrings(value: unknown): string[] {
+  if (value == null) return [];
+
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => flattenToStrings(item));
+  }
+
+  if (typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).flatMap((item) =>
+      flattenToStrings(item),
+    );
+  }
+
+  const normalized = String(value).trim();
+  return normalized ? [normalized] : [];
+}
+
+function normalizeText(value: unknown, fallback = "") {
+  const parts = flattenToStrings(value);
+  return parts.length > 0 ? parts.join("; ") : fallback;
+}
+
+function normalizeStringArray(value: unknown, fallback: string[] = []) {
+  const parts = flattenToStrings(value);
+  return parts.length > 0 ? parts : fallback;
+}
+
+function splitDiagnosisValues(diagnosis: unknown) {
+  const values = flattenToStrings(diagnosis);
+
+  return values
+    .flatMap((value) => value.split(/[,;/]/))
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function deriveCoverageStatus(analysis: UploadedAnalysis): CoverageStatus {
+  if (analysis.prior_auth_required) {
+    return "Prior Auth Required";
+  }
+
+  if (normalizeStringArray(analysis.missing_information).length > 0) {
+    return "Covered with Limits";
+  }
+
+  return "Preferred";
+}
+
+function transformBackendResponse(response: unknown): PlanCard | null {
+  if (!response || typeof response !== "object") {
+    return null;
+  }
+
+  const payload = response as ParsePdfResponse;
+  const analysis = payload.analysis;
+
+  if (!analysis) {
+    return null;
+  }
+
+  const diagnosisCodes = splitDiagnosisValues(analysis.diagnosis);
+  const missingInformation = normalizeStringArray(
+    analysis.missing_information,
+  );
+  const nextSteps = normalizeStringArray(analysis.recommended_next_steps);
+  const summary = normalizeText(analysis.summary);
+  const extractedText = normalizeText(payload.extracted_text);
+  const patientName = normalizeText(analysis.patient_name);
+  const medicationName = normalizeText(analysis.medication_name);
+  const insuranceProvider = normalizeText(
+    analysis.insurance_provider,
+    "Uploaded payer",
+  );
+  const diagnosisRequirement = normalizeText(
+    analysis.diagnosis,
+    "Not specified in uploaded PDF",
+  );
+  const sourceSnippet = summary || extractedText
+    ? truncateText(summary || extractedText || "")
+    : "No source excerpt was returned from the uploaded PDF.";
+  const additionalNotes = [
+    summary,
+    nextSteps.length
+      ? `Recommended next steps: ${nextSteps.join("; ")}`
+      : "No recommended next steps were returned.",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return {
+    id: crypto.randomUUID(),
+    payer: insuranceProvider,
+    drugName: medicationName || "Uploaded medication",
+    rxNormCode: patientName
+      ? `Policy analysis for ${patientName}`
+      : "Medical policy PDF analysis",
+    coverageStatus: deriveCoverageStatus(analysis),
+    effectiveDate: new Date().toISOString().slice(0, 10),
+    effectiveDateLabel: "Analyzed",
+    sourceLinkLabel: "Excerpt from uploaded PDF",
+    hasSourceDocumentLink: false,
+    diagnosisCodes: diagnosisCodes.length
+      ? diagnosisCodes
+      : ["Diagnosis not specified"],
+    criteria: {
+      trialDuration: analysis.prior_auth_required
+        ? "Prior authorization is required; prepare supporting documentation before submission."
+        : "No prior authorization requirement was identified in the uploaded PDF.",
+      labRequirements: missingInformation.length
+        ? missingInformation
+        : ["No missing information was flagged by the parser."],
+      ageLimit: "Not specified in uploaded PDF",
+      diagnosisRequirement,
+      additionalNotes:
+        additionalNotes || "No additional notes were extracted from the PDF.",
+      sourceSnippet,
+      sourceDocLink: "#uploaded-pdf-analysis",
+    },
+  };
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("search");
-
-  // ── Coverage Search state ──
+  const [uploadedPlans, setUploadedPlans] = useState<PlanCard[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedPayers, setSelectedPayers] = useState<Set<string>>(
-    new Set(PAYERS),
-  );
   const [selectedDiagnosis, setSelectedDiagnosis] = useState("");
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [compareIds, setCompareIds] = useState<Set<string>>(new Set());
   const [selectedVoiceId, setSelectedVoiceId] = useState(VOICE_OPTIONS[0].id);
   const [showUpload, setShowUpload] = useState(true);
 
-  // ── Hooks MUST come before any conditional returns ──
+  const activePlans = useMemo(
+    () => (uploadedPlans.length > 0 ? uploadedPlans : MOCK_PLANS),
+    [uploadedPlans],
+  );
+
+  const availablePayers = useMemo(
+    () => [...new Set(activePlans.map((plan) => plan.payer))],
+    [activePlans],
+  );
+
+  const diagnosisOptions = useMemo(() => {
+    const values = [...new Set(activePlans.flatMap((plan) => plan.diagnosisCodes))];
+    return values.map((value) => ({
+      value,
+      label: diagnosisLabels.get(value) ?? value,
+    }));
+  }, [activePlans]);
+
+  const [selectedPayers, setSelectedPayers] = useState<Set<string>>(
+    () => new Set(availablePayers),
+  );
+
+  useEffect(() => {
+    setSelectedPayers(new Set(availablePayers));
+    setSelectedDiagnosis("");
+    setSelectedCardId(null);
+    setCompareIds(new Set());
+  }, [availablePayers]);
+
+  const handleUploadSuccess = (data: unknown) => {
+    const transformedPlan = transformBackendResponse(data);
+
+    if (!transformedPlan) {
+      return;
+    }
+
+    setUploadedPlans((prev) => [...prev, transformedPlan]);
+  };
+
   const filteredPlans = useMemo(() => {
-    return MOCK_PLANS.filter((p) => {
+    return activePlans.filter((plan) => {
       if (
         searchQuery &&
-        !p.drugName.toLowerCase().includes(searchQuery.toLowerCase())
-      )
+        !plan.drugName.toLowerCase().includes(searchQuery.toLowerCase())
+      ) {
         return false;
-      if (!selectedPayers.has(p.payer)) return false;
-      if (selectedDiagnosis && !p.diagnosisCodes.includes(selectedDiagnosis))
+      }
+
+      if (!selectedPayers.has(plan.payer)) {
         return false;
+      }
+
+      if (selectedDiagnosis && !plan.diagnosisCodes.includes(selectedDiagnosis)) {
+        return false;
+      }
+
       return true;
     });
-  }, [searchQuery, selectedPayers, selectedDiagnosis]);
+  }, [activePlans, searchQuery, selectedPayers, selectedDiagnosis]);
 
   const selectedPlan = selectedCardId
-    ? MOCK_PLANS.find((p) => p.id === selectedCardId)
+    ? activePlans.find((plan) => plan.id === selectedCardId) ?? null
     : null;
-  const comparePlans = MOCK_PLANS.filter((p) => compareIds.has(p.id));
+  const comparePlans = activePlans.filter((plan) => compareIds.has(plan.id));
   const isCompareMode = comparePlans.length >= 2;
 
   const togglePayer = (payer: string) => {
@@ -97,17 +294,21 @@ export default function App() {
     e?.preventDefault();
   };
 
-  // ── Now conditional rendering is OK ──
   if (showUpload) {
-    return <UploadPage onContinue={() => setShowUpload(false)} />;
+    return (
+      <UploadPage
+        onContinue={() => setShowUpload(false)}
+        onUploadSuccess={handleUploadSuccess}
+      />
+    );
   }
 
   const stats = {
     total: filteredPlans.length,
-    preferred: filteredPlans.filter((p) => p.coverageStatus === "Preferred")
+    preferred: filteredPlans.filter((plan) => plan.coverageStatus === "Preferred")
       .length,
     paRequired: filteredPlans.filter(
-      (p) => p.coverageStatus === "Prior Auth Required",
+      (plan) => plan.coverageStatus === "Prior Auth Required",
     ).length,
   };
 
@@ -119,12 +320,10 @@ export default function App() {
           "linear-gradient(135deg, #f0f7f5 0%, #e8f4f8 50%, #f0f0fa 100%)",
       }}
     >
-      {/* WCAG: Skip to main content link */}
       <a href="#main-content" className="skip-link">
         Skip to main content
       </a>
 
-      {/* ── Header with professional branding ── */}
       <header
         className="border-b border-border bg-card sticky top-0 z-20"
         role="banner"
@@ -144,7 +343,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* ── Tab Navigation ── */}
         <nav aria-label="Main navigation" className="max-w-7xl mx-auto px-4">
           <div className="flex gap-0 border-b-0" role="tablist">
             {TABS.map((tab) => (
@@ -169,9 +367,7 @@ export default function App() {
         </nav>
       </header>
 
-      {/* ── Main Content ── */}
       <main id="main-content" className="flex-1">
-        {/* ═══ TAB 1: Coverage Search ═══ */}
         <div
           role="tabpanel"
           id="panel-search"
@@ -185,13 +381,11 @@ export default function App() {
               coverage details.
             </p>
 
-            {/* Filters */}
             <form
               onSubmit={handleSearch}
               className="flex flex-col lg:flex-row gap-4 mb-6"
               aria-label="Coverage search filters"
             >
-              {/* Search */}
               <div className="flex-1 max-w-md">
                 <label htmlFor="drug-search" className="block text-sm mb-1.5">
                   Drug Name
@@ -216,10 +410,9 @@ export default function App() {
                 </span>
               </div>
 
-              {/* Payer checkboxes */}
               <fieldset className="flex items-end gap-4">
                 <legend className="text-sm mb-1.5">Payers</legend>
-                {PAYERS.map((payer) => (
+                {availablePayers.map((payer) => (
                   <label
                     key={payer}
                     className="flex items-center gap-2 cursor-pointer min-h-[44px] px-1"
@@ -235,7 +428,6 @@ export default function App() {
                 ))}
               </fieldset>
 
-              {/* Diagnosis dropdown */}
               <div className="flex flex-col">
                 <label htmlFor="diagnosis-select" className="text-sm mb-1.5">
                   Diagnosis Code
@@ -247,15 +439,14 @@ export default function App() {
                   className="px-3 py-2.5 min-h-[44px] rounded-lg border border-border bg-input-background text-sm max-w-xs"
                 >
                   <option value="">All Diagnoses</option>
-                  {DIAGNOSIS_OPTIONS.map((d) => (
-                    <option key={d.value} value={d.value}>
-                      {d.label}
+                  {diagnosisOptions.map((diagnosis) => (
+                    <option key={diagnosis.value} value={diagnosis.value}>
+                      {diagnosis.label}
                     </option>
                   ))}
                 </select>
               </div>
 
-              {/* Search button */}
               <div className="flex items-end">
                 <button
                   type="submit"
@@ -267,7 +458,6 @@ export default function App() {
               </div>
             </form>
 
-            {/* Stats bar */}
             <div
               className="flex items-center gap-6 mb-5 text-sm text-muted-foreground"
               role="status"
@@ -304,14 +494,14 @@ export default function App() {
               )}
             </div>
 
-            {/* Results heading */}
             <h3 className="mt-0 mb-4">
               {searchQuery
                 ? `Results for "${searchQuery}"`
-                : "All Indexed Plans"}
+                : uploadedPlans.length > 0
+                  ? "Uploaded Policy Analyses"
+                  : "All Indexed Plans"}
             </h3>
 
-            {/* Cards grid */}
             {filteredPlans.length === 0 ? (
               <div
                 className="text-center py-16 text-muted-foreground"
@@ -349,7 +539,6 @@ export default function App() {
             )}
           </div>
 
-          {/* Bottom panels */}
           {isCompareMode ? (
             <ComparisonPanel
               plans={comparePlans}
@@ -367,7 +556,6 @@ export default function App() {
           ) : null}
         </div>
 
-        {/* ═══ TAB 2: Criteria Lookup ═══ */}
         <div
           role="tabpanel"
           id="panel-criteria"
@@ -379,7 +567,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* ═══ TAB 3: Policy Changes ═══ */}
         <div
           role="tabpanel"
           id="panel-changes"

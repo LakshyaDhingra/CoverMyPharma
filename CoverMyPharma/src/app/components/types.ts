@@ -8,7 +8,7 @@ export type CoverageStatus =
   | "Not Covered"
   | "Covered with Limits";
 
-export type Payer = "Aetna" | "UHC" | "Cigna";
+export type Payer = string;
 
 export interface ClinicalCriteria {
   trialDuration: string;
@@ -27,6 +27,9 @@ export interface PlanCard {
   rxNormCode: string;
   coverageStatus: CoverageStatus;
   effectiveDate: string;
+  effectiveDateLabel?: string;
+  sourceLinkLabel?: string;
+  hasSourceDocumentLink?: boolean;
   diagnosisCodes: string[];
   criteria: ClinicalCriteria;
 }
