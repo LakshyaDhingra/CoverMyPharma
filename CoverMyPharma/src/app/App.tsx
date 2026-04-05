@@ -1,10 +1,4 @@
-import {
-  useEffect,
-  useMemo,
-  useState,
-  type FormEvent,
-  type ReactNode,
-} from "react";
+import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 import {
   Search,
   GitCompareArrows,
@@ -18,7 +12,6 @@ import {
 import {
   MOCK_PLANS,
   DIAGNOSIS_OPTIONS,
-  type CoverageStatus,
   type PlanCard,
 } from "./components/mock-data";
 import { PlanSnapshotCard } from "./components/plan-card";
@@ -28,25 +21,10 @@ import { CriteriaLookup } from "./components/criteria-lookup";
 import { PolicyChanges } from "./components/policy-changes";
 import { VOICE_OPTIONS } from "./components/tts";
 import UploadPage from "./components/upload-page";
+import { transformBackendResponse } from "./lib/plan-transform";
+import { useSavedPlans } from "@/hooks/useSavedPlans";
 
 type ActiveTab = "search" | "criteria" | "changes";
-
-interface UploadedAnalysis {
-  patient_name?: unknown;
-  medication_name?: unknown;
-  diagnosis?: unknown;
-  insurance_provider?: unknown;
-  prior_auth_required?: boolean;
-  summary?: unknown;
-  missing_information?: unknown;
-  recommended_next_steps?: unknown;
-}
-
-interface ParsePdfResponse {
-  success?: boolean;
-  extracted_text?: unknown;
-  analysis?: UploadedAnalysis;
-}
 
 const TABS: { id: ActiveTab; label: string; icon: ReactNode }[] = [
   {
@@ -70,132 +48,6 @@ const diagnosisLabels = new Map(
   DIAGNOSIS_OPTIONS.map((option) => [option.value, option.label]),
 );
 
-function truncateText(text: string, maxLength = 240) {
-  if (text.length <= maxLength) return text;
-  return `${text.slice(0, maxLength).trimEnd()}...`;
-}
-
-function flattenToStrings(value: unknown): string[] {
-  if (value == null) return [];
-
-  if (Array.isArray(value)) {
-    return value.flatMap((item) => flattenToStrings(item));
-  }
-
-  if (typeof value === "object") {
-    return Object.values(value as Record<string, unknown>).flatMap((item) =>
-      flattenToStrings(item),
-    );
-  }
-
-  const normalized = String(value).trim();
-  return normalized ? [normalized] : [];
-}
-
-function normalizeText(value: unknown, fallback = "") {
-  const parts = flattenToStrings(value);
-  return parts.length > 0 ? parts.join("; ") : fallback;
-}
-
-function normalizeStringArray(value: unknown, fallback: string[] = []) {
-  const parts = flattenToStrings(value);
-  return parts.length > 0 ? parts : fallback;
-}
-
-function splitDiagnosisValues(diagnosis: unknown) {
-  const values = flattenToStrings(diagnosis);
-
-  return values
-    .flatMap((value) => value.split(/[,;/]/))
-    .map((value) => value.trim())
-    .filter(Boolean);
-}
-
-function deriveCoverageStatus(analysis: UploadedAnalysis): CoverageStatus {
-  if (analysis.prior_auth_required) {
-    return "Prior Auth Required";
-  }
-
-  if (normalizeStringArray(analysis.missing_information).length > 0) {
-    return "Covered with Limits";
-  }
-
-  return "Preferred";
-}
-
-function transformBackendResponse(response: unknown): PlanCard | null {
-  if (!response || typeof response !== "object") {
-    return null;
-  }
-
-  const payload = response as ParsePdfResponse;
-  const analysis = payload.analysis;
-
-  if (!analysis) {
-    return null;
-  }
-
-  const diagnosisCodes = splitDiagnosisValues(analysis.diagnosis);
-  const missingInformation = normalizeStringArray(
-    analysis.missing_information,
-  );
-  const nextSteps = normalizeStringArray(analysis.recommended_next_steps);
-  const summary = normalizeText(analysis.summary);
-  const extractedText = normalizeText(payload.extracted_text);
-  const patientName = normalizeText(analysis.patient_name);
-  const medicationName = normalizeText(analysis.medication_name);
-  const insuranceProvider = normalizeText(
-    analysis.insurance_provider,
-    "Uploaded payer",
-  );
-  const diagnosisRequirement = normalizeText(
-    analysis.diagnosis,
-    "Not specified in uploaded PDF",
-  );
-  const sourceSnippet = summary || extractedText
-    ? truncateText(summary || extractedText || "")
-    : "No source excerpt was returned from the uploaded PDF.";
-  const additionalNotes = [
-    summary,
-    nextSteps.length
-      ? `Recommended next steps: ${nextSteps.join("; ")}`
-      : "No recommended next steps were returned.",
-  ]
-    .filter(Boolean)
-    .join(" ");
-
-  return {
-    id: crypto.randomUUID(),
-    payer: insuranceProvider,
-    drugName: medicationName || "Uploaded medication",
-    rxNormCode: patientName
-      ? `Policy analysis for ${patientName}`
-      : "Medical policy PDF analysis",
-    coverageStatus: deriveCoverageStatus(analysis),
-    effectiveDate: new Date().toISOString().slice(0, 10),
-    effectiveDateLabel: "Analyzed",
-    sourceLinkLabel: "Excerpt from uploaded PDF",
-    hasSourceDocumentLink: false,
-    diagnosisCodes: diagnosisCodes.length
-      ? diagnosisCodes
-      : ["Diagnosis not specified"],
-    criteria: {
-      trialDuration: analysis.prior_auth_required
-        ? "Prior authorization is required; prepare supporting documentation before submission."
-        : "No prior authorization requirement was identified in the uploaded PDF.",
-      labRequirements: missingInformation.length
-        ? missingInformation
-        : ["No missing information was flagged by the parser."],
-      ageLimit: "Not specified in uploaded PDF",
-      diagnosisRequirement,
-      additionalNotes:
-        additionalNotes || "No additional notes were extracted from the PDF.",
-      sourceSnippet,
-      sourceDocLink: "#uploaded-pdf-analysis",
-    },
-  };
-}
-
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("search");
   const [uploadedPlans, setUploadedPlans] = useState<PlanCard[]>([]);
@@ -205,11 +57,20 @@ export default function App() {
   const [compareIds, setCompareIds] = useState<Set<string>>(new Set());
   const [selectedVoiceId, setSelectedVoiceId] = useState(VOICE_OPTIONS[0].id);
   const [showUpload, setShowUpload] = useState(true);
+  const {
+    plans: savedPlans,
+    isLoading: isSavedPlansLoading,
+    error: savedPlansError,
+  } = useSavedPlans();
 
   const activePlans = useMemo(
-    () => (uploadedPlans.length > 0 ? uploadedPlans : MOCK_PLANS),
-    [uploadedPlans],
+    () =>
+      uploadedPlans.length > 0 || savedPlans.length > 0
+        ? [...uploadedPlans, ...savedPlans]
+        : MOCK_PLANS,
+    [uploadedPlans, savedPlans],
   );
+  const hasRealPlans = uploadedPlans.length > 0 || savedPlans.length > 0;
 
   const availablePayers = useMemo(
     () => [...new Set(activePlans.map((plan) => plan.payer))],
@@ -224,16 +85,28 @@ export default function App() {
     }));
   }, [activePlans]);
 
-  const [selectedPayers, setSelectedPayers] = useState<Set<string>>(
-    () => new Set(availablePayers),
-  );
+  const [selectedPayers, setSelectedPayers] = useState<Set<string> | null>(null);
+  const activeSelectedPayers = useMemo(() => {
+    if (selectedPayers === null) {
+      return new Set(availablePayers);
+    }
 
-  useEffect(() => {
-    setSelectedPayers(new Set(availablePayers));
-    setSelectedDiagnosis("");
-    setSelectedCardId(null);
-    setCompareIds(new Set());
-  }, [availablePayers]);
+    const availableSet = new Set(availablePayers);
+    const next = new Set(
+      [...selectedPayers].filter((payer) => availableSet.has(payer)),
+    );
+
+    if (selectedPayers.size > 0 && next.size === 0) {
+      return new Set(availablePayers);
+    }
+
+    return next;
+  }, [availablePayers, selectedPayers]);
+  const activeSelectedDiagnosis = diagnosisOptions.some(
+    (diagnosis) => diagnosis.value === selectedDiagnosis,
+  )
+    ? selectedDiagnosis
+    : "";
 
   const handleUploadSuccess = (data: unknown) => {
     const transformedPlan = transformBackendResponse(data);
@@ -254,17 +127,20 @@ export default function App() {
         return false;
       }
 
-      if (!selectedPayers.has(plan.payer)) {
+      if (!activeSelectedPayers.has(plan.payer)) {
         return false;
       }
 
-      if (selectedDiagnosis && !plan.diagnosisCodes.includes(selectedDiagnosis)) {
+      if (
+        activeSelectedDiagnosis &&
+        !plan.diagnosisCodes.includes(activeSelectedDiagnosis)
+      ) {
         return false;
       }
 
       return true;
     });
-  }, [activePlans, searchQuery, selectedPayers, selectedDiagnosis]);
+  }, [activePlans, searchQuery, activeSelectedPayers, activeSelectedDiagnosis]);
 
   const selectedPlan = selectedCardId
     ? activePlans.find((plan) => plan.id === selectedCardId) ?? null
@@ -274,7 +150,7 @@ export default function App() {
 
   const togglePayer = (payer: string) => {
     setSelectedPayers((prev) => {
-      const next = new Set(prev);
+      const next = prev === null ? new Set(activeSelectedPayers) : new Set(prev);
       if (next.has(payer)) next.delete(payer);
       else next.add(payer);
       return next;
@@ -380,6 +256,12 @@ export default function App() {
               Search by drug name to discover which plans cover it and view
               coverage details.
             </p>
+            {savedPlansError && (
+              <p className="text-sm text-amber-800 mb-4" role="status">
+                Saved records could not be loaded from Supabase. Showing the
+                data currently available in session.
+              </p>
+            )}
 
             <form
               onSubmit={handleSearch}
@@ -419,7 +301,7 @@ export default function App() {
                   >
                     <input
                       type="checkbox"
-                      checked={selectedPayers.has(payer)}
+                      checked={activeSelectedPayers.has(payer)}
                       onChange={() => togglePayer(payer)}
                       className="w-5 h-5 rounded accent-primary"
                     />
@@ -434,7 +316,7 @@ export default function App() {
                 </label>
                 <select
                   id="diagnosis-select"
-                  value={selectedDiagnosis}
+                  value={activeSelectedDiagnosis}
                   onChange={(e) => setSelectedDiagnosis(e.target.value)}
                   className="px-3 py-2.5 min-h-[44px] rounded-lg border border-border bg-input-background text-sm max-w-xs"
                 >
@@ -497,10 +379,15 @@ export default function App() {
             <h3 className="mt-0 mb-4">
               {searchQuery
                 ? `Results for "${searchQuery}"`
-                : uploadedPlans.length > 0
+                : hasRealPlans
                   ? "Uploaded Policy Analyses"
                   : "All Indexed Plans"}
             </h3>
+            {isSavedPlansLoading && !uploadedPlans.length && (
+              <p className="text-sm text-muted-foreground mb-4" role="status">
+                Loading saved policy records from Supabase...
+              </p>
+            )}
 
             {filteredPlans.length === 0 ? (
               <div
@@ -563,7 +450,11 @@ export default function App() {
           className={activeTab === "criteria" ? "" : "hidden"}
         >
           <div className="max-w-5xl mx-auto px-4 py-6">
-            <CriteriaLookup />
+            <CriteriaLookup
+              plans={activePlans}
+              hasRealPlans={hasRealPlans}
+              isLoading={isSavedPlansLoading}
+            />
           </div>
         </div>
 

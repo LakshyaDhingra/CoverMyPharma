@@ -1,34 +1,68 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Search, FileText, ExternalLink, FlaskConical, Clock, Calendar, Stethoscope, StickyNote, Info } from "lucide-react";
 import { MOCK_PLANS, PAYER_COLORS, STATUS_STYLES } from "./mock-data";
+import type { PlanCard } from "./types";
 
-const PAYER_OPTIONS = ["Aetna", "UHC", "Cigna"] as const;
-const DRUG_OPTIONS = [...new Set(MOCK_PLANS.map((p) => p.drugName))];
+interface CriteriaLookupProps {
+  plans?: PlanCard[];
+  hasRealPlans?: boolean;
+  isLoading?: boolean;
+}
 
-export function CriteriaLookup() {
+export function CriteriaLookup({
+  plans = MOCK_PLANS,
+  hasRealPlans = false,
+  isLoading = false,
+}: CriteriaLookupProps) {
   const [selectedPayer, setSelectedPayer] = useState("");
   const [selectedDrug, setSelectedDrug] = useState("");
-  const [lookupResult, setLookupResult] = useState<typeof MOCK_PLANS[number] | null>(null);
+  const [lookupResult, setLookupResult] = useState<PlanCard | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
   const [showSource, setShowSource] = useState(false);
+  const payerOptions = useMemo(
+    () => [...new Set(plans.map((plan) => plan.payer))].sort(),
+    [plans],
+  );
+  const drugOptions = useMemo(
+    () => [...new Set(plans.map((plan) => plan.drugName))].sort(),
+    [plans],
+  );
+  const activeSelectedPayer = payerOptions.includes(selectedPayer)
+    ? selectedPayer
+    : "";
+  const activeSelectedDrug = drugOptions.includes(selectedDrug)
+    ? selectedDrug
+    : "";
 
   const handleLookup = () => {
     setHasSearched(true);
     setShowSource(false);
-    const match = MOCK_PLANS.find(
-      (p) => p.payer === selectedPayer && p.drugName === selectedDrug
+    const match = plans.find(
+      (p) =>
+        p.payer === activeSelectedPayer && p.drugName === activeSelectedDrug
     );
     setLookupResult(match || null);
   };
 
-  const canSearch = selectedPayer && selectedDrug;
+  const canSearch = activeSelectedPayer && activeSelectedDrug;
+  const sourceLinkLabel =
+    lookupResult?.sourceLinkLabel ?? "Open source document";
+  const hasSourceDocumentLink =
+    lookupResult?.hasSourceDocumentLink ?? true;
 
   return (
     <div>
       <h2 className="mt-0 mb-1">Criteria Lookup</h2>
       <p className="text-sm text-muted-foreground mb-6">
-        Select a specific plan and drug to view detailed prior authorization criteria.
+        {hasRealPlans
+          ? "Search your saved payer-policy records by plan and drug to inspect detailed criteria."
+          : "Select a specific plan and drug to view detailed prior authorization criteria from the demo dataset."}
       </p>
+      {isLoading && (
+        <p className="text-sm text-muted-foreground mb-4" role="status">
+          Loading saved policy records...
+        </p>
+      )}
 
       {/* Selection controls */}
       <div className="flex flex-col sm:flex-row gap-4 mb-6">
@@ -38,12 +72,12 @@ export function CriteriaLookup() {
           </label>
           <select
             id="plan-select"
-            value={selectedPayer}
+            value={activeSelectedPayer}
             onChange={(e) => { setSelectedPayer(e.target.value); setHasSearched(false); }}
             className="w-full px-3 py-2.5 min-h-[44px] rounded-lg border border-border bg-input-background text-sm"
           >
             <option value="">-- Select a Plan --</option>
-            {PAYER_OPTIONS.map((p) => (
+            {payerOptions.map((p) => (
               <option key={p} value={p}>{p}</option>
             ))}
           </select>
@@ -55,12 +89,12 @@ export function CriteriaLookup() {
           </label>
           <select
             id="drug-select"
-            value={selectedDrug}
+            value={activeSelectedDrug}
             onChange={(e) => { setSelectedDrug(e.target.value); setHasSearched(false); }}
             className="w-full px-3 py-2.5 min-h-[44px] rounded-lg border border-border bg-input-background text-sm"
           >
             <option value="">-- Select a Drug --</option>
-            {DRUG_OPTIONS.map((d) => (
+            {drugOptions.map((d) => (
               <option key={d} value={d}>{d}</option>
             ))}
           </select>
@@ -75,7 +109,7 @@ export function CriteriaLookup() {
                 ? "bg-primary text-primary-foreground hover:bg-primary/90"
                 : "bg-muted text-muted-foreground cursor-not-allowed"
             }`}
-            aria-label={`Look up prior auth criteria for ${selectedDrug || "drug"} under ${selectedPayer || "plan"}`}
+            aria-label={`Look up prior auth criteria for ${activeSelectedDrug || "drug"} under ${activeSelectedPayer || "plan"}`}
           >
             <Search className="w-4 h-4" aria-hidden="true" />
             Look Up Criteria
@@ -102,7 +136,7 @@ export function CriteriaLookup() {
             </span>
           </div>
           <p className="text-sm text-muted-foreground mb-5">
-            {lookupResult.rxNormCode} &middot; Effective {lookupResult.effectiveDate}
+            {lookupResult.rxNormCode} &middot; {lookupResult.effectiveDateLabel ?? "Effective"} {lookupResult.effectiveDate}
           </p>
 
           {/* Structured criteria display */}
@@ -147,14 +181,20 @@ export function CriteriaLookup() {
             {showSource && (
               <div id="criteria-source-panel" className="mt-3 p-4 bg-muted/50 rounded-lg border border-border" role="region" aria-label="Source document excerpt">
                 <p className="text-sm italic text-foreground leading-relaxed mb-2">"{lookupResult.criteria.sourceSnippet}"</p>
-                <a
-                  href={lookupResult.criteria.sourceDocLink}
-                  className="inline-flex items-center gap-1.5 min-h-[44px] text-sm text-primary underline hover:text-primary/80"
-                >
-                  <ExternalLink className="w-4 h-4" aria-hidden="true" />
-                  Open source document
-                  <span className="sr-only">(opens in new window)</span>
-                </a>
+                {hasSourceDocumentLink ? (
+                  <a
+                    href={lookupResult.criteria.sourceDocLink}
+                    className="inline-flex items-center gap-1.5 min-h-[44px] text-sm text-primary underline hover:text-primary/80"
+                  >
+                    <ExternalLink className="w-4 h-4" aria-hidden="true" />
+                    {sourceLinkLabel}
+                    <span className="sr-only">(opens in new window)</span>
+                  </a>
+                ) : (
+                  <p className="text-sm text-muted-foreground mb-0">
+                    {sourceLinkLabel}
+                  </p>
+                )}
               </div>
             )}
           </div>

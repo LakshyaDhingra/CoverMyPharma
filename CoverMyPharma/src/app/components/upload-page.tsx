@@ -17,6 +17,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { useAuth0 } from "@auth0/auth0-react";
+import type { ParsePdfResponse } from "@/app/lib/plan-transform";
 import { hasSupabaseConfig, supabase } from "@/lib/supabase";
 import { useSupabaseUser } from "@/hooks/useSupabaseUser";
 
@@ -34,20 +35,6 @@ interface UploadedFile {
 interface UploadPageProps {
   onContinue: () => void;
   onUploadSuccess: (data: unknown) => void;
-}
-
-interface ParsedAnalysis {
-  patient_name?: unknown;
-  medication_name?: unknown;
-  diagnosis?: unknown;
-  prior_auth_required?: boolean;
-  summary?: unknown;
-}
-
-interface ParsePdfResponse {
-  success?: boolean;
-  extracted_text?: unknown;
-  analysis?: ParsedAnalysis;
 }
 
 const FEATURES = [
@@ -319,15 +306,15 @@ export default function UploadPage({
           {isAuthenticated && (
             <button
               onClick={onContinue}
-              disabled={doneCount === 0}
+              disabled={!canContinue}
               className="text-sm font-medium px-4 py-2 rounded-lg transition-all duration-200"
               style={{
-                background: doneCount > 0 ? "#3d3d3d" : "#9ca3af",
-                color: doneCount > 0 ? "white" : "#d1d5db",
-                cursor: doneCount > 0 ? "pointer" : "not-allowed",
+                background: canContinue ? "#3d3d3d" : "#9ca3af",
+                color: canContinue ? "white" : "#d1d5db",
+                cursor: canContinue ? "pointer" : "not-allowed",
               }}
             >
-              {doneCount > 0 ? "Continue to analysis" : "Upload docs first"}
+              {canContinue ? "Continue to analysis" : "Upload docs first"}
             </button>
           )}
         </div>
