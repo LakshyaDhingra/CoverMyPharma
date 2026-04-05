@@ -16,17 +16,12 @@ import {
   TrendingUp,
   ChevronRight,
 } from "lucide-react";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import { useAuth0 } from "@auth0/auth0-react";
-import { supabase } from "@/lib/supabase";
+import { hasSupabaseConfig, supabase } from "@/lib/supabase";
 import { useSupabaseUser } from "@/hooks/useSupabaseUser";
 
 import logo from "@/assets/CoverMyPharma.svg";
 import symbol from "@/assets/CoverMyPharmaSymbol.svg";
-// Logo colors from the caduceus:
-// Charcoal #3d3d3d — main text, icon, buttons
-// Steel blue #5b8db8 — the "Rx" accent, highlights
-// Light gray #f5f6f8 — page background
 
 interface UploadedFile {
   id: string;
@@ -38,6 +33,21 @@ interface UploadedFile {
 
 interface UploadPageProps {
   onContinue: () => void;
+  onUploadSuccess: (data: unknown) => void;
+}
+
+interface ParsedAnalysis {
+  patient_name?: unknown;
+  medication_name?: unknown;
+  diagnosis?: unknown;
+  prior_auth_required?: boolean;
+  summary?: unknown;
+}
+
+interface ParsePdfResponse {
+  success?: boolean;
+  extracted_text?: unknown;
+  analysis?: ParsedAnalysis;
 }
 
 const FEATURES = [
@@ -49,7 +59,7 @@ const FEATURES = [
   {
     icon: <TrendingUp className="w-4 h-4" />,
     title: "Cross-payer comparison",
-    desc: "See company coverage information side by side in one matrix — no more hunting through separate documents.",
+    desc: "See company coverage information side by side in one matrix - no more hunting through separate documents.",
   },
   {
     icon: <Shield className="w-4 h-4" />,
@@ -58,20 +68,26 @@ const FEATURES = [
   },
 ];
 
-const FIELD_LABELS: Record<string, string> = {
-  drugName: "Drug Name / Generic Name",
-  conditions: "Conditions / Diagnoses",
-  priorAuthRequired: "Prior Auth Requirement",
-  clinicalCriteria: "Clinical Criteria",
-  diagnosisCodes: "Diagnosis Codes",
-  effectiveDate: "Effective Date",
-};
+function flattenToStrings(value: unknown): string[] {
+  if (value == null) return [];
 
-function normalizeMissingField(field: string) {
-  return (
-    FIELD_LABELS[field] ??
-    field.replace(/([A-Z])/g, " $1").replace(/^./, (s) => s.toUpperCase())
-  );
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => flattenToStrings(item));
+  }
+
+  if (typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).flatMap((item) =>
+      flattenToStrings(item),
+    );
+  }
+
+  const normalized = String(value).trim();
+  return normalized ? [normalized] : [];
+}
+
+function normalizeText(value: unknown, fallback = "") {
+  const parts = flattenToStrings(value);
+  return parts.length > 0 ? parts.join("; ") : fallback;
 }
 
 function formatBytes(bytes: number) {
@@ -80,172 +96,141 @@ function formatBytes(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export default function UploadPage({ onContinue }: UploadPageProps) {
+export default function UploadPage({
+  onContinue,
+  onUploadSuccess,
+}: UploadPageProps) {
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const processingRef = useRef<Set<string>>(new Set());
-  const { loginWithRedirect, logout, user, isAuthenticated } = useAuth0();
+  const {
+    loginWithRedirect,
+    logout,
+    user,
+    isAuthenticated,
+    getAccessTokenSilently,
+  } = useAuth0();
 
-  // Sync user with Supabase
   useSupabaseUser();
+
+  const persistUploadedDocument = useCallback(
+    async (file: File, responseData: ParsePdfResponse) => {
+      if (!hasSupabaseConfig || !supabase || !user?.sub) {
+        return;
+      }
+
+      const { data: userData, error: userError } = await supabase
+        .from("users")
+        .upsert(
+          {
+            auth0_id: user.sub,
+            email: user.email ?? "",
+            name: user.name ?? null,
+          },
+          { onConflict: "auth0_id" },
+        )
+        .select()
+        .single();
+
+      if (userError) {
+        throw userError;
+      }
+
+      const analysis = responseData.analysis;
+      const diagnosis = normalizeText(analysis?.diagnosis);
+      const medication = normalizeText(analysis?.medication_name);
+      const summary = normalizeText(analysis?.summary);
+
+      const { error: docError } = await supabase.from("medical_documents").insert({
+        user_id: userData.id,
+        filename: file.name,
+        file_size: file.size,
+        drug_name: medication || null,
+        conditions: diagnosis || null,
+        prior_auth_required:
+          analysis?.prior_auth_required == null
+            ? null
+            : String(analysis.prior_auth_required),
+        clinical_criteria: summary || null,
+        diagnosis_codes: diagnosis || null,
+        effective_date: null,
+        raw_extracted_data: responseData,
+      });
+
+      if (docError) {
+        throw docError;
+      }
+    },
+    [user],
+  );
 
   const handlePdfProcessing = useCallback(
     async (file: File, fileId: string) => {
-      // Prevent duplicate processing
       if (processingRef.current.has(fileId)) return;
       processingRef.current.add(fileId);
 
       try {
         setFiles((prev) =>
           prev.map((f) =>
-            f.id === fileId ? { ...f, status: "processing" } : f,
+            f.id === fileId
+              ? { ...f, status: "processing", errorMessage: undefined }
+              : f,
           ),
         );
 
-        const fileData = await file.arrayBuffer();
-        const uint8Array = new Uint8Array(fileData);
-        let binary = "";
-        for (let i = 0; i < uint8Array.length; i++) {
-          binary += String.fromCharCode(uint8Array[i]);
-        }
-        const base64Data = btoa(binary);
+        const token = await getAccessTokenSilently();
+        const formData = new FormData();
+        formData.append("file", file);
 
-        // Always use frontend Gemini call (hackathon mode)
-        const genAI = new GoogleGenerativeAI(
-          import.meta.env.VITE_GEMINI_API_KEY,
-        );
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-        const result = await model.generateContent([
-          `Analyze this PDF document and extract the following required fields for pharmaceutical coverage/policy information. Return a JSON object with this exact structure:
-
-{
-  "validation": {
-    "isValid": boolean,
-    "missingFields": string[] (list of missing required fields)
-  },
-  "data": {
-    "drugName": "string or null",
-    "conditions": "string or null", 
-    "priorAuthRequired": "string or null",
-    "clinicalCriteria": "string or null",
-    "diagnosisCodes": "string or null",
-    "effectiveDate": "string or null"
-  }
-}
-
-Required fields to check for:
-- Drug Name/generic Name
-- Conditions/Diagnoses
-- Prior Auth Req for Drug  
-- Clinical Criteria
-- Diagnosis Codes
-- Effective date
-
-Set isValid to true only if ALL required fields are present and contain meaningful content. If any field is missing or empty, set isValid to false and list the missing fields in missingFields array.`,
+        const res = await fetch(
+          `${import.meta.env.VITE_API_BASE_URL}/api/parse-pdf`,
           {
-            inlineData: { data: base64Data, mimeType: "application/pdf" },
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+            body: formData,
           },
-        ]);
+        );
 
-        const response = await result.response;
-        const text = await response.text();
-        console.log("Gemini response:", text);
+        const data = (await res.json()) as ParsePdfResponse & {
+          detail?: string;
+          error?: string;
+        };
+
+        if (!res.ok) {
+          throw new Error(
+            data?.detail || data?.error || `API error: ${res.status}`,
+          );
+        }
+
+        onUploadSuccess(data);
 
         try {
-          // Extract JSON from markdown code blocks if present
-          let jsonText = text.trim();
-
-          // Check if response is wrapped in ```json ... ```
-          const jsonMatch = jsonText.match(/```json\s*(\{[\s\S]*?\})\s*```/);
-          if (jsonMatch) {
-            jsonText = jsonMatch[1];
-          } else {
-            // Try to find JSON object directly
-            const jsonStart = jsonText.indexOf("{");
-            const jsonEnd = jsonText.lastIndexOf("}");
-            if (jsonStart !== -1 && jsonEnd !== -1 && jsonEnd > jsonStart) {
-              jsonText = jsonText.substring(jsonStart, jsonEnd + 1);
-            }
-          }
-
-          // Parse the JSON response
-          const parsed = JSON.parse(jsonText);
-          const missing = parsed.validation?.missingFields || ["unknown fields"];
-          const friendlyFields = missing.map(normalizeMissingField);
-          const validationErrorMessage = parsed.validation?.isValid
-            ? null
-            : `PDF validation failed. Missing required fields: ${friendlyFields.join(", ")}. Please upload a complete pharmaceutical coverage/policy document.`;
-
-          if (!user?.sub) {
-            throw new Error("Authenticated user is not available");
-          }
-
-          const { data: userData, error: userError } = await supabase
-            .from("users")
-            .upsert(
-              {
-                auth0_id: user.sub,
-                email: user.email ?? "",
-                name: user.name ?? null,
-              },
-              { onConflict: "auth0_id" },
-            )
-            .select()
-            .single();
-
-          if (userError) throw userError;
-
-          const { error: docError } = await supabase
-            .from("medical_documents")
-            .insert({
-              user_id: userData.id,
-              filename: file.name,
-              file_size: file.size,
-              drug_name: parsed.data?.drugName || null,
-              conditions: parsed.data?.conditions || null,
-              prior_auth_required: parsed.data?.priorAuthRequired || null,
-              clinical_criteria: parsed.data?.clinicalCriteria || null,
-              diagnosis_codes: parsed.data?.diagnosisCodes || null,
-              effective_date: parsed.data?.effectiveDate || null,
-              raw_extracted_data: parsed,
-            });
-
-          if (docError) throw docError;
-
-          console.log("✓ Data saved to database");
-
-          if (validationErrorMessage) {
-            throw new Error(validationErrorMessage);
-          }
-
-          console.log("✓ PDF validated and parsed successfully");
-          setFiles((prev) =>
-            prev.map((f) => (f.id === fileId ? { ...f, status: "done" } : f)),
-          );
-        } catch (workflowErr) {
-          console.error("✗ PDF processing workflow failed:", workflowErr);
-          const errorMessage =
-            workflowErr instanceof Error
-              ? workflowErr.message
-              : String(workflowErr);
-
-          setFiles((prev) =>
-            prev.map((f) =>
-              f.id === fileId ? { ...f, status: "error", errorMessage } : f,
-            ),
-          );
+          await persistUploadedDocument(file, data);
+        } catch (persistError) {
+          console.warn("Supabase persistence skipped:", persistError);
         }
-      } catch (err) {
-        console.error("✗ PDF processing failed:", err);
+
         setFiles((prev) =>
-          prev.map((f) => (f.id === fileId ? { ...f, status: "error" } : f)),
+          prev.map((f) => (f.id === fileId ? { ...f, status: "done" } : f)),
+        );
+      } catch (err) {
+        console.error("PDF processing failed:", err);
+        const errorMessage =
+          err instanceof Error ? err.message : "PDF processing failed";
+
+        setFiles((prev) =>
+          prev.map((f) =>
+            f.id === fileId ? { ...f, status: "error", errorMessage } : f,
+          ),
         );
       } finally {
         processingRef.current.delete(fileId);
       }
     },
-    [user],
+    [getAccessTokenSilently, onUploadSuccess, persistUploadedDocument],
   );
 
   const addFiles = useCallback(
@@ -288,7 +273,6 @@ Set isValid to true only if ALL required fields are present and contain meaningf
         background: "#5b8db8",
       }}
     >
-      {/* ── Top nav ── */}
       <header className="flex items-center justify-between px-8 py-4 bg-transparent border-b border-white/20 shadow-lg transition-all duration-300">
         <div className="flex items-center gap-3">
           <img
@@ -349,7 +333,6 @@ Set isValid to true only if ALL required fields are present and contain meaningf
         </div>
       </header>
 
-      {/* ── Dark hero band ── */}
       <div
         className="w-full py-16 px-8 text-center"
         style={{
@@ -359,13 +342,12 @@ Set isValid to true only if ALL required fields are present and contain meaningf
         <img
           src={logo}
           alt="CoverMyPharma"
-          className="h-90
-          0 w-auto mx-auto mb-6 opacity-90"
+          className="h-90 0 w-auto mx-auto mb-6 opacity-90"
           style={{ filter: "brightness(0) invert(1)" }}
         />
 
         <h1 className="text-4xl font-semibold text-white leading-tight mb-4">
-          Medical policy docs,{" "}
+          Medical policy docs, {" "}
           <span style={{ color: "#5b8db8" }}>finally decoded.</span>
         </h1>
         <p
@@ -378,7 +360,6 @@ Set isValid to true only if ALL required fields are present and contain meaningf
       </div>
 
       <main className="flex-1 w-full px-8 py-12 flex flex-col items-center gap-10">
-        {/* Login Required Message */}
         {!isAuthenticated && (
           <div className="bg-white rounded-2xl border-2 border-red-200 shadow-lg p-10 w-full max-w-2xl text-center">
             <Shield className="w-12 h-12 mx-auto mb-4 text-red-500" />
@@ -401,20 +382,9 @@ Set isValid to true only if ALL required fields are present and contain meaningf
             >
               Sign in now
             </button>
-            <button
-              onClick={onContinue}
-              className="mt-3 px-8 py-3 rounded-lg font-medium transition-all border border-gray-200 hover:shadow-lg"
-              style={{
-                background: "#ffffff",
-                color: "#3d3d3d",
-              }}
-            >
-              Temporary bypass to comparison
-            </button>
           </div>
         )}
 
-        {/* Upload card — only show if authenticated */}
         {isAuthenticated && (
           <div className="bg-white rounded-2xl border border-gray-100 shadow-lg p-10 w-full max-w-2xl">
             <h2
@@ -424,10 +394,9 @@ Set isValid to true only if ALL required fields are present and contain meaningf
               UPLOAD POLICY DOCUMENTS
             </h2>
             <p className="text-sm mb-6" style={{ color: "#9ca3af" }}>
-              PDF files only · Multiple files supported
+              PDF files only - Multiple files supported
             </p>
 
-            {/* Drop zone — taller */}
             <div
               onDragOver={(e) => {
                 e.preventDefault();
@@ -463,7 +432,7 @@ Set isValid to true only if ALL required fields are present and contain meaningf
                 Drop policy PDFs here
               </p>
               <p className="text-sm" style={{ color: "#9ca3af" }}>
-                or{" "}
+                or {" "}
                 <span
                   className="underline cursor-pointer"
                   style={{ color: "#5b8db8" }}
@@ -473,7 +442,6 @@ Set isValid to true only if ALL required fields are present and contain meaningf
               </p>
             </div>
 
-            {/* File list */}
             {files.length > 0 && (
               <div className="mt-4 flex flex-col gap-2">
                 {files.map((f) => (
@@ -527,7 +495,7 @@ Set isValid to true only if ALL required fields are present and contain meaningf
                                 : "Failed"}
                         </span>
                         <span className="text-xs" style={{ color: "#d1d5db" }}>
-                          ·
+                          -
                         </span>
                         <span className="text-xs" style={{ color: "#9ca3af" }}>
                           {formatBytes(f.size)}
@@ -535,7 +503,7 @@ Set isValid to true only if ALL required fields are present and contain meaningf
                       </div>
                       {f.status === "error" && f.errorMessage && (
                         <div className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-700">
-                          <p className="font-semibold">PDF validation failed</p>
+                          <p className="font-semibold">PDF processing failed</p>
                           <p className="mt-1 break-words">{f.errorMessage}</p>
                         </div>
                       )}
@@ -552,7 +520,6 @@ Set isValid to true only if ALL required fields are present and contain meaningf
               </div>
             )}
 
-            {/* CTA */}
             <button
               onClick={onContinue}
               disabled={!canContinue}
@@ -573,30 +540,18 @@ Set isValid to true only if ALL required fields are present and contain meaningf
                 "Upload at least one PDF to continue"
               )}
             </button>
-
-            <button
-              onClick={onContinue}
-              className="mt-3 w-full py-3 rounded-xl text-sm font-medium transition-all border border-gray-200 hover:shadow-md"
-              style={{
-                background: "#ffffff",
-                color: "#3d3d3d",
-              }}
-            >
-              Temporary bypass to comparison
-            </button>
           </div>
         )}
 
-        {/* Features — simple 3-column row underneath */}
         <div className="w-full max-w-2xl grid grid-cols-3 gap-6 pb-12">
-          {FEATURES.map((f, i) => (
-            <div key={i} className="text-center">
-              <p className="text-sm font-semibold text-white mb-1">{f.title}</p>
+          {FEATURES.map((feature, index) => (
+            <div key={index} className="text-center">
+              <p className="text-sm font-semibold text-white mb-1">{feature.title}</p>
               <p
                 className="text-xs leading-relaxed"
                 style={{ color: "rgba(255,255,255,0.6)" }}
               >
-                {f.desc}
+                {feature.desc}
               </p>
             </div>
           ))}

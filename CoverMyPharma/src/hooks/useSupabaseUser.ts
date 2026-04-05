@@ -1,12 +1,16 @@
 import { useEffect } from "react";
 import { useAuth0 } from "@auth0/auth0-react";
-import { supabase } from "@/lib/supabase";
+import { hasSupabaseConfig, supabase } from "@/lib/supabase";
 
 export function useSupabaseUser() {
   const { user, isAuthenticated } = useAuth0();
 
   useEffect(() => {
     const syncUser = async () => {
+      if (!hasSupabaseConfig || !supabase) {
+        return;
+      }
+
       if (isAuthenticated && user?.sub) {
         try {
           const { error } = await supabase.from("users").upsert(
