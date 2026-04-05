@@ -83,12 +83,7 @@ export default function UploadPage({ onContinue }: UploadPageProps) {
   const [isDragging, setIsDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const processingRef = useRef<Set<string>>(new Set());
-  const {
-    loginWithRedirect,
-    logout,
-    user,
-    isAuthenticated,
-  } = useAuth0();
+  const { loginWithRedirect, logout, user, isAuthenticated } = useAuth0();
 
   const handlePdfProcessing = useCallback(
     async (file: File, fileId: string) => {
