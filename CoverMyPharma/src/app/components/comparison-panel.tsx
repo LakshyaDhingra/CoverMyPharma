@@ -1,5 +1,10 @@
 import { AlertTriangle, X } from "lucide-react";
-import { PlanCard, PAYER_COLORS, STATUS_STYLES } from "./mock-data";
+import {
+  PlanCard,
+  PAYER_COLORS,
+  DEFAULT_PAYER_STYLE,
+  STATUS_STYLES,
+} from "./mock-data";
 
 interface ComparisonPanelProps {
   plans: PlanCard[];
@@ -47,7 +52,7 @@ export function ComparisonPanel({ plans, onClose }: ComparisonPanelProps) {
               <tr>
                 <th scope="col" className="text-left p-3 bg-muted rounded-tl-lg w-48 min-w-[180px]">Criteria</th>
                 {plans.map((plan) => {
-                  const ps = PAYER_COLORS[plan.payer];
+                  const ps = PAYER_COLORS[plan.payer] ?? DEFAULT_PAYER_STYLE;
                   return (
                     <th scope="col" key={plan.id} className="text-left p-3 bg-muted min-w-[260px]">
                       <span className={`inline-block px-2 py-0.5 rounded-full text-sm ${ps.bg} ${ps.text} mr-2`}>{plan.payer}</span>
