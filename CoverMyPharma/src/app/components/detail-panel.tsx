@@ -1,21 +1,6 @@
 import { useState } from "react";
-import {
-  FileText,
-  ExternalLink,
-  X,
-  FlaskConical,
-  Clock,
-  Calendar,
-  Stethoscope,
-  StickyNote,
-  Hash,
-} from "lucide-react";
-import {
-  PlanCard,
-  PAYER_COLORS,
-  DEFAULT_PAYER_STYLE,
-  STATUS_STYLES,
-} from "./mock-data";
+import { FileText, ExternalLink, X, FlaskConical, Clock, Calendar, Stethoscope, StickyNote, Hash } from "lucide-react";
+import { PlanCard, PAYER_COLORS, STATUS_STYLES } from "./mock-data";
 import { TtsIconButton } from "./tts-icon-button";
 import {
   buildPlanSpeechSummary,
@@ -37,12 +22,9 @@ export function DetailPanel({
   onVoiceChange,
 }: DetailPanelProps) {
   const [showSource, setShowSource] = useState(false);
-  const payerStyle = PAYER_COLORS[plan.payer] ?? DEFAULT_PAYER_STYLE;
+  const payerStyle = PAYER_COLORS[plan.payer];
   const statusStyle = STATUS_STYLES[plan.coverageStatus];
   const c = plan.criteria;
-  const effectiveDateLabel = plan.effectiveDateLabel ?? "Effective";
-  const sourceLinkLabel = plan.sourceLinkLabel ?? "Open source document";
-  const hasSourceDocumentLink = plan.hasSourceDocumentLink ?? true;
   const speechSummary = buildPlanSpeechSummary(plan);
 
   return (
@@ -64,7 +46,7 @@ export function DetailPanel({
               </span>
             </div>
             <p className="text-sm text-muted-foreground mt-1 mb-0">
-              {plan.rxNormCode} &middot; {effectiveDateLabel}{" "}
+              {plan.rxNormCode} &middot; Effective{" "}
               {formatEffectiveDate(plan.effectiveDate)}
             </p>
           </div>
@@ -128,18 +110,14 @@ export function DetailPanel({
           {showSource && (
             <div id="source-panel" className="mt-3 p-4 bg-muted/50 rounded-lg border border-border" role="region" aria-label="Source document excerpt">
               <p className="text-sm italic text-foreground leading-relaxed mb-2">"{c.sourceSnippet}"</p>
-              {hasSourceDocumentLink ? (
-                <a
-                  href={c.sourceDocLink}
-                  className="inline-flex items-center gap-1.5 min-h-[44px] text-sm text-primary underline hover:text-primary/80"
-                >
-                  <ExternalLink className="w-4 h-4" aria-hidden="true" />
-                  {sourceLinkLabel}
-                  <span className="sr-only">(opens in new window)</span>
-                </a>
-              ) : (
-                <p className="text-sm text-muted-foreground mb-0">{sourceLinkLabel}</p>
-              )}
+              <a
+                href={c.sourceDocLink}
+                className="inline-flex items-center gap-1.5 min-h-[44px] text-sm text-primary underline hover:text-primary/80"
+              >
+                <ExternalLink className="w-4 h-4" aria-hidden="true" />
+                Open source document
+                <span className="sr-only">(opens in new window)</span>
+              </a>
             </div>
           )}
         </div>

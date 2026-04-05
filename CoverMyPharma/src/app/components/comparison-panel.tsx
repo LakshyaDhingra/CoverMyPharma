@@ -1,10 +1,6 @@
 import { AlertTriangle, X } from "lucide-react";
-import {
-  PlanCard,
-  PAYER_COLORS,
-  DEFAULT_PAYER_STYLE,
-  STATUS_STYLES,
-} from "./mock-data";
+
+import { PlanCard, PAYER_COLORS, STATUS_STYLES } from "./mock-data";
 import { TtsIconButton } from "./tts-icon-button";
 import {
   buildComparisonSpeechSummary,
@@ -112,7 +108,8 @@ export function ComparisonPanel({
                   Criteria
                 </th>
                 {plans.map((plan) => {
-                  const payerStyle = PAYER_COLORS[plan.payer] ?? DEFAULT_PAYER_STYLE;
+                  const payerStyle = PAYER_COLORS[plan.payer];
+
                   return (
                     <th
                       scope="col"

@@ -1,10 +1,5 @@
 import { Check, ChevronRight } from "lucide-react";
-import {
-  PlanCard,
-  PAYER_COLORS,
-  DEFAULT_PAYER_STYLE,
-  STATUS_STYLES,
-} from "./mock-data";
+import { PlanCard, PAYER_COLORS, STATUS_STYLES } from "./mock-data";
 
 interface PlanCardProps {
   plan: PlanCard;
@@ -15,9 +10,8 @@ interface PlanCardProps {
 }
 
 export function PlanSnapshotCard({ plan, isSelected, isCompareChecked, onSelect, onCompareToggle }: PlanCardProps) {
-  const payerStyle = PAYER_COLORS[plan.payer] ?? DEFAULT_PAYER_STYLE;
+  const payerStyle = PAYER_COLORS[plan.payer];
   const statusStyle = STATUS_STYLES[plan.coverageStatus];
-  const effectiveDateLabel = plan.effectiveDateLabel ?? "Effective";
 
   return (
     <div
@@ -77,8 +71,8 @@ export function PlanSnapshotCard({ plan, isSelected, isCompareChecked, onSelect,
 
       {/* Effective date */}
       <p className="text-sm text-muted-foreground mt-3 mb-0">
-        <span className="sr-only">{effectiveDateLabel} date: </span>
-        {effectiveDateLabel}: {new Date(plan.effectiveDate).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" })}
+        <span className="sr-only">Effective date: </span>
+        Effective: {new Date(plan.effectiveDate).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" })}
       </p>
 
       {/* Diagnosis codes */}
