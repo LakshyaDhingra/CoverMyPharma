@@ -1,18 +1,41 @@
 import { useState } from "react";
-import { FileText, ExternalLink, X, FlaskConical, Clock, Calendar, Stethoscope, StickyNote } from "lucide-react";
+import {
+  FileText,
+  ExternalLink,
+  X,
+  FlaskConical,
+  Clock,
+  Calendar,
+  Stethoscope,
+  StickyNote,
+  Hash,
+} from "lucide-react";
 import {
   PlanCard,
   PAYER_COLORS,
   DEFAULT_PAYER_STYLE,
   STATUS_STYLES,
 } from "./mock-data";
+import { TtsIconButton } from "./tts-icon-button";
+import {
+  buildPlanSpeechSummary,
+  formatEffectiveDate,
+  VOICE_OPTIONS,
+} from "./tts";
 
 interface DetailPanelProps {
   plan: PlanCard;
   onClose: () => void;
+  voiceId?: string;
+  onVoiceChange: (voiceId: string) => void;
 }
 
-export function DetailPanel({ plan, onClose }: DetailPanelProps) {
+export function DetailPanel({
+  plan,
+  onClose,
+  voiceId,
+  onVoiceChange,
+}: DetailPanelProps) {
   const [showSource, setShowSource] = useState(false);
   const payerStyle = PAYER_COLORS[plan.payer] ?? DEFAULT_PAYER_STYLE;
   const statusStyle = STATUS_STYLES[plan.coverageStatus];
@@ -20,6 +43,7 @@ export function DetailPanel({ plan, onClose }: DetailPanelProps) {
   const effectiveDateLabel = plan.effectiveDateLabel ?? "Effective";
   const sourceLinkLabel = plan.sourceLinkLabel ?? "Open source document";
   const hasSourceDocumentLink = plan.hasSourceDocumentLink ?? true;
+  const speechSummary = buildPlanSpeechSummary(plan);
 
   return (
     <section
@@ -40,16 +64,43 @@ export function DetailPanel({ plan, onClose }: DetailPanelProps) {
               </span>
             </div>
             <p className="text-sm text-muted-foreground mt-1 mb-0">
-              {plan.rxNormCode} &middot; {effectiveDateLabel} {plan.effectiveDate}
+              {plan.rxNormCode} &middot; {effectiveDateLabel}{" "}
+              {formatEffectiveDate(plan.effectiveDate)}
             </p>
           </div>
-          <button
-            onClick={onClose}
-            className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg hover:bg-muted transition-colors"
-            aria-label="Close detail panel"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2 flex-wrap justify-end">
+            <label
+              htmlFor={`voice-select-${plan.id}`}
+              className="text-sm text-muted-foreground"
+            >
+              Voice
+            </label>
+            <select
+              id={`voice-select-${plan.id}`}
+              value={voiceId}
+              onChange={(e) => onVoiceChange(e.target.value)}
+              className="px-3 py-2 min-h-[44px] rounded-lg border border-border bg-input-background text-sm min-w-[140px]"
+            >
+              {VOICE_OPTIONS.map((voice) => (
+                <option key={voice.id} value={voice.id}>
+                  {voice.label}
+                </option>
+              ))}
+            </select>
+            <TtsIconButton
+              text={speechSummary}
+              label={`${plan.drugName} ${plan.payer} detail summary`}
+              voiceId={voiceId}
+              className="min-w-[44px] min-h-[44px]"
+            />
+            <button
+              onClick={onClose}
+              className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg hover:bg-muted transition-colors"
+              aria-label="Close detail panel"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Clinical Criteria Grid */}
@@ -58,6 +109,7 @@ export function DetailPanel({ plan, onClose }: DetailPanelProps) {
           <CriteriaItem icon={<Clock className="w-4 h-4" />} label="Trial Duration" value={c.trialDuration} />
           <CriteriaItem icon={<FlaskConical className="w-4 h-4" />} label="Lab Requirements" value={c.labRequirements.join("; ")} />
           <CriteriaItem icon={<Calendar className="w-4 h-4" />} label="Age Limit" value={c.ageLimit} />
+          <CriteriaItem icon={<Hash className="w-4 h-4" />} label="Diagnosis Codes" value={plan.diagnosisCodes.join(", ")} />
           <CriteriaItem icon={<Stethoscope className="w-4 h-4" />} label="Diagnosis Requirement" value={c.diagnosisRequirement} />
           <CriteriaItem icon={<StickyNote className="w-4 h-4" />} label="Additional Notes" value={c.additionalNotes} className="md:col-span-2" />
         </div>

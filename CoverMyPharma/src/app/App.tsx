@@ -26,6 +26,7 @@ import { DetailPanel } from "./components/detail-panel";
 import { ComparisonPanel } from "./components/comparison-panel";
 import { CriteriaLookup } from "./components/criteria-lookup";
 import { PolicyChanges } from "./components/policy-changes";
+import { VOICE_OPTIONS } from "./components/tts";
 import UploadPage from "./components/upload-page";
 
 type ActiveTab = "search" | "criteria" | "changes";
@@ -202,6 +203,7 @@ export default function App() {
   const [selectedDiagnosis, setSelectedDiagnosis] = useState("");
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [compareIds, setCompareIds] = useState<Set<string>>(new Set());
+  const [selectedVoiceId, setSelectedVoiceId] = useState(VOICE_OPTIONS[0].id);
   const [showUpload, setShowUpload] = useState(true);
 
   const activePlans = useMemo(
@@ -541,11 +543,15 @@ export default function App() {
             <ComparisonPanel
               plans={comparePlans}
               onClose={() => setCompareIds(new Set())}
+              voiceId={selectedVoiceId}
+              onVoiceChange={setSelectedVoiceId}
             />
           ) : selectedPlan ? (
             <DetailPanel
               plan={selectedPlan}
               onClose={() => setSelectedCardId(null)}
+              voiceId={selectedVoiceId}
+              onVoiceChange={setSelectedVoiceId}
             />
           ) : null}
         </div>
