@@ -11,6 +11,48 @@ import type {
 // Re-export types for backward compatibility
 export type { CoverageStatus, Payer, ClinicalCriteria, PlanCard, DiagnosisOption, PolicyChange, QuarterOption };
 
+function normalizeDiagnosisLabel(label: string) {
+  return label.includes("—") ? label.split("—")[1].trim() : label.trim();
+}
+
+export function getPlanConditions(plan: PlanCard) {
+  if (plan.conditions?.trim()) {
+    return plan.conditions.trim();
+  }
+
+  const labels = plan.diagnosisCodes
+    .map((code) => DIAGNOSIS_OPTIONS.find((option) => option.value === code)?.label)
+    .filter((label): label is string => Boolean(label))
+    .map(normalizeDiagnosisLabel);
+
+  if (labels.length > 0) {
+    return [...new Set(labels)].join(", ");
+  }
+
+  return plan.criteria.diagnosisRequirement;
+}
+
+export function getPlanPriorAuthRequirement(plan: PlanCard) {
+  if (plan.priorAuthRequirement?.trim()) {
+    return plan.priorAuthRequirement.trim();
+  }
+
+  switch (plan.coverageStatus) {
+    case "Prior Auth Required":
+      return "Required";
+    case "Preferred":
+      return "Not required";
+    case "Step Therapy":
+      return "Step therapy required";
+    case "Not Covered":
+      return "Not covered";
+    case "Covered with Limits":
+      return "Required with limits";
+    default:
+      return "Not available";
+  }
+}
+
 export const DIAGNOSIS_OPTIONS: DiagnosisOption[] = [
   { value: "C34.90", label: "C34.90 — Non-small cell lung cancer" },
   { value: "C43.9", label: "C43.9 — Malignant melanoma" },

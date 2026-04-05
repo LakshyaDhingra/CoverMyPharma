@@ -2,6 +2,7 @@ import {
   useState,
   useRef,
   useCallback,
+  useEffect,
   type DragEvent,
   type ChangeEvent,
 } from "react";
@@ -68,6 +69,8 @@ const FEATURES = [
   },
 ];
 
+const COMPARISON_REDIRECT_KEY = "cover-my-pharma:comparison-redirect";
+
 function flattenToStrings(value: unknown): string[] {
   if (value == null) return [];
 
@@ -113,6 +116,29 @@ export default function UploadPage({
   } = useAuth0();
 
   useSupabaseUser();
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      return;
+    }
+
+    if (window.sessionStorage.getItem(COMPARISON_REDIRECT_KEY) !== "true") {
+      return;
+    }
+
+    window.sessionStorage.removeItem(COMPARISON_REDIRECT_KEY);
+    onContinue();
+  }, [isAuthenticated, onContinue]);
+
+  const handleComparisonRedirect = useCallback(() => {
+    if (isAuthenticated) {
+      onContinue();
+      return;
+    }
+
+    window.sessionStorage.setItem(COMPARISON_REDIRECT_KEY, "true");
+    loginWithRedirect();
+  }, [isAuthenticated, loginWithRedirect, onContinue]);
 
   const persistUploadedDocument = useCallback(
     async (file: File, responseData: ParsePdfResponse) => {
@@ -183,16 +209,22 @@ export default function UploadPage({
         const formData = new FormData();
         formData.append("file", file);
 
-        const res = await fetch(
-          `${import.meta.env.VITE_API_BASE_URL}/api/parse-pdf`,
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${token}`,
-            },
-            body: formData,
+        // Dev: same-origin `/api/*` is proxied to FastAPI (:8000) by Vite — never use the TTS port (:3001).
+        const parsePdfUrl = import.meta.env.DEV
+          ? "/api/parse-pdf"
+          : new URL(
+              "/api/parse-pdf",
+              import.meta.env.VITE_API_BASE_URL?.trim() ||
+                window.location.origin,
+            ).href;
+
+        const res = await fetch(parsePdfUrl, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
           },
-        );
+          body: formData,
+        });
 
         const data = (await res.json()) as ParsePdfResponse & {
           detail?: string;
@@ -285,6 +317,12 @@ export default function UploadPage({
         </div>
 
         <div className="flex items-center gap-3">
+          <button
+            onClick={handleComparisonRedirect}
+            className="text-sm px-4 py-2 rounded-lg transition-all duration-200 hover:shadow-md text-white border border-white/25 hover:bg-white/20"
+          >
+            Coverage comparison
+          </button>
           {isAuthenticated ? (
             <>
               <span className="text-sm text-white">Hello, {user?.name}</span>
@@ -315,20 +353,6 @@ export default function UploadPage({
                 Get started
               </button>
             </>
-          )}
-          {isAuthenticated && (
-            <button
-              onClick={onContinue}
-              disabled={doneCount === 0}
-              className="text-sm font-medium px-4 py-2 rounded-lg transition-all duration-200"
-              style={{
-                background: doneCount > 0 ? "#3d3d3d" : "#9ca3af",
-                color: doneCount > 0 ? "white" : "#d1d5db",
-                cursor: doneCount > 0 ? "pointer" : "not-allowed",
-              }}
-            >
-              {doneCount > 0 ? "Continue to analysis" : "Upload docs first"}
-            </button>
           )}
         </div>
       </header>

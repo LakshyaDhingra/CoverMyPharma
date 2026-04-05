@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { Search, FileText, ExternalLink, FlaskConical, Clock, Calendar, Stethoscope, StickyNote, Info } from "lucide-react";
-import { MOCK_PLANS, PAYER_COLORS, STATUS_STYLES } from "./mock-data";
+import { Search, FileText, ExternalLink, FlaskConical, Clock, Calendar, Stethoscope, StickyNote, Info, ShieldCheck, Hash } from "lucide-react";
+import { MOCK_PLANS, PAYER_COLORS, STATUS_STYLES, getPlanConditions, getPlanPriorAuthRequirement } from "./mock-data";
+import { formatEffectiveDate } from "./tts";
 
 const PAYER_OPTIONS = ["Aetna", "UHC", "Cigna"] as const;
 const DRUG_OPTIONS = [...new Set(MOCK_PLANS.map((p) => p.drugName))];
@@ -22,6 +23,10 @@ export function CriteriaLookup() {
   };
 
   const canSearch = selectedPayer && selectedDrug;
+  const conditions = lookupResult ? getPlanConditions(lookupResult) : "";
+  const priorAuthRequirement = lookupResult
+    ? getPlanPriorAuthRequirement(lookupResult)
+    : "";
 
   return (
     <div>
@@ -102,12 +107,14 @@ export function CriteriaLookup() {
             </span>
           </div>
           <p className="text-sm text-muted-foreground mb-5">
-            {lookupResult.rxNormCode} &middot; Effective {lookupResult.effectiveDate}
+            Conditions: {conditions} &middot; Effective{" "}
+            {formatEffectiveDate(lookupResult.effectiveDate)}
           </p>
 
           {/* Structured criteria display */}
           <h4 className="mb-3">Prior Authorization Criteria</h4>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <CriteriaBlock icon={<ShieldCheck className="w-4 h-4" />} label="Prior Auth Requirement" value={priorAuthRequirement} />
             <CriteriaBlock icon={<Clock className="w-4 h-4" />} label="Trial Duration" value={lookupResult.criteria.trialDuration} />
             <CriteriaBlock icon={<FlaskConical className="w-4 h-4" />} label="Lab Requirements">
               <ul className="list-disc list-inside text-sm space-y-1 mt-1">
@@ -118,6 +125,7 @@ export function CriteriaLookup() {
             </CriteriaBlock>
             <CriteriaBlock icon={<Calendar className="w-4 h-4" />} label="Age Limit" value={lookupResult.criteria.ageLimit} />
             <CriteriaBlock icon={<Stethoscope className="w-4 h-4" />} label="Diagnosis Requirement" value={lookupResult.criteria.diagnosisRequirement} />
+            <CriteriaBlock icon={<Hash className="w-4 h-4" />} label="Diagnosis Codes" value={lookupResult.diagnosisCodes.join(", ")} />
             <CriteriaBlock icon={<StickyNote className="w-4 h-4" />} label="Additional Notes" value={lookupResult.criteria.additionalNotes} className="md:col-span-2" />
           </div>
 

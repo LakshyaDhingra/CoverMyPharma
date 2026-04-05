@@ -1,4 +1,5 @@
 import type { PlanCard } from "./types";
+import { getPlanConditions, getPlanPriorAuthRequirement } from "./mock-data";
 
 export interface VoiceOption {
   id: string;
@@ -12,7 +13,16 @@ export const VOICE_OPTIONS: VoiceOption[] = [
 ];
 
 export function formatEffectiveDate(date: string) {
-  return new Date(date).toLocaleDateString("en-US", {
+  if (!date) {
+    return "Not available";
+  }
+
+  const normalizedDate = new Date(date);
+  if (Number.isNaN(normalizedDate.getTime())) {
+    return "Not available";
+  }
+
+  return normalizedDate.toLocaleDateString("en-US", {
     year: "numeric",
     month: "long",
     day: "numeric",
@@ -64,8 +74,14 @@ export async function generateSpeechAudio(text: string, voiceId?: string) {
 }
 
 export function buildPlanSpeechSummary(plan: PlanCard) {
+  const conditions = getPlanConditions(plan);
+  const priorAuthRequirement = getPlanPriorAuthRequirement(plan);
+
   return [
     `${plan.drugName} for ${plan.payer}.`,
+    plan.genericName ? `Generic name: ${plan.genericName}.` : "",
+    `Conditions or diagnosis: ${conditions}.`,
+    `Prior authorization requirement: ${priorAuthRequirement}.`,
     `Coverage status is ${plan.coverageStatus}.`,
     `Effective ${formatEffectiveDate(plan.effectiveDate)}.`,
     `Diagnosis codes include ${formatDiagnosisCodesForSpeech(plan.diagnosisCodes)}.`,
@@ -80,9 +96,14 @@ export function buildPlanSpeechSummary(plan: PlanCard) {
 export function buildComparisonSpeechSummary(plans: PlanCard[]) {
   return plans
     .map((plan) => {
+      const conditions = getPlanConditions(plan);
+      const priorAuthRequirement = getPlanPriorAuthRequirement(plan);
+
       return [
         `${plan.payer} lists ${plan.drugName} as ${plan.coverageStatus}.`,
-        `${plan.rxNormCode}.`,
+        plan.genericName ? `Generic name: ${plan.genericName}.` : "",
+        `Conditions or diagnosis: ${conditions}.`,
+        `Prior authorization requirement: ${priorAuthRequirement}.`,
         `Effective ${formatEffectiveDate(plan.effectiveDate)}.`,
         `Diagnosis codes include ${formatDiagnosisCodesForSpeech(plan.diagnosisCodes)}.`,
         `Trial duration: ${plan.criteria.trialDuration}.`,

@@ -5,6 +5,8 @@ import {
   PAYER_COLORS,
   DEFAULT_PAYER_STYLE,
   STATUS_STYLES,
+  getPlanConditions,
+  getPlanPriorAuthRequirement,
 } from "./mock-data";
 import { TtsIconButton } from "./tts-icon-button";
 import {
@@ -25,7 +27,21 @@ const CRITERIA_ROWS: {
   label: string;
   accessor: (plan: PlanCard) => string;
 }[] = [
-  { key: "rxnorm", label: "RxNorm Code", accessor: (plan) => plan.rxNormCode },
+  {
+    key: "genericName",
+    label: "Generic Name",
+    accessor: (plan) => plan.genericName || "Not available",
+  },
+  {
+    key: "conditions",
+    label: "Conditions / Diagnosis",
+    accessor: (plan) => getPlanConditions(plan),
+  },
+  {
+    key: "priorAuth",
+    label: "Prior Auth Requirement",
+    accessor: (plan) => getPlanPriorAuthRequirement(plan),
+  },
   { key: "status", label: "Coverage Status", accessor: (plan) => plan.coverageStatus },
   { key: "effective", label: "Effective Date", accessor: (plan) => formatEffectiveDate(plan.effectiveDate) },
   { key: "diagnosisCodes", label: "Diagnosis Codes", accessor: (plan) => plan.diagnosisCodes.join(", ") },
@@ -49,6 +65,9 @@ export function ComparisonPanel({
   onVoiceChange,
 }: ComparisonPanelProps) {
   const comparisonSummary = buildComparisonSpeechSummary(plans);
+  const comparisonGridStyle = {
+    gridTemplateColumns: `180px repeat(${plans.length}, minmax(0, 1fr))`,
+  };
 
   return (
     <section
@@ -92,6 +111,59 @@ export function ComparisonPanel({
               <X className="w-5 h-5" />
             </button>
           </div>
+        </div>
+
+        <div className="grid gap-4 w-full mb-6" style={comparisonGridStyle}>
+          <div aria-hidden="true" />
+          {plans.map((plan) => {
+            const payerStyle = PAYER_COLORS[plan.payer] ?? DEFAULT_PAYER_STYLE;
+            const statusStyle = STATUS_STYLES[plan.coverageStatus];
+
+            return (
+              <article
+                key={`${plan.id}-summary`}
+                className="rounded-xl border border-border bg-muted/20 p-4"
+                aria-label={`${plan.drugName} summary`}
+              >
+                <div className="flex items-center gap-2 flex-wrap mb-3">
+                  <span
+                    className={`inline-block px-2 py-0.5 rounded-full text-sm ${payerStyle.bg} ${payerStyle.text}`}
+                  >
+                    {plan.payer}
+                  </span>
+                  <span
+                    className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-sm ${statusStyle.bg} ${statusStyle.text}`}
+                  >
+                    <span aria-hidden="true">{statusStyle.icon}</span>
+                    {plan.coverageStatus}
+                  </span>
+                </div>
+                <h3 className="mt-0 mb-2">{plan.drugName}</h3>
+                <div className="space-y-1.5 text-sm text-muted-foreground">
+                  <p className="mb-0">
+                    <span className="font-medium text-foreground">Generic:</span>{" "}
+                    {plan.genericName || "Not available"}
+                  </p>
+                  <p className="mb-0">
+                    <span className="font-medium text-foreground">Conditions:</span>{" "}
+                    {getPlanConditions(plan)}
+                  </p>
+                  <p className="mb-0">
+                    <span className="font-medium text-foreground">Prior Auth:</span>{" "}
+                    {getPlanPriorAuthRequirement(plan)}
+                  </p>
+                  <p className="mb-0">
+                    <span className="font-medium text-foreground">Diagnosis Codes:</span>{" "}
+                    {plan.diagnosisCodes.join(", ")}
+                  </p>
+                  <p className="mb-0">
+                    <span className="font-medium text-foreground">Coverage Effective:</span>{" "}
+                    {formatEffectiveDate(plan.effectiveDate)}
+                  </p>
+                </div>
+              </article>
+            );
+          })}
         </div>
 
         <div

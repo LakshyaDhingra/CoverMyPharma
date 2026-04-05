@@ -24,6 +24,9 @@ export interface PlanCard {
   id: string;
   payer: Payer;
   drugName: string;
+  genericName?: string;
+  conditions?: string;
+  priorAuthRequirement?: string;
   rxNormCode: string;
   coverageStatus: CoverageStatus;
   effectiveDate: string;

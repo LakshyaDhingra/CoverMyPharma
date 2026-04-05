@@ -5,13 +5,13 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
+import { useAuth0 } from "@auth0/auth0-react";
 import {
   Search,
   GitCompareArrows,
   LayoutGrid,
   CheckCircle,
   AlertTriangle,
-  Pill,
   ClipboardList,
   History,
 } from "lucide-react";
@@ -28,15 +28,21 @@ import { CriteriaLookup } from "./components/criteria-lookup";
 import { PolicyChanges } from "./components/policy-changes";
 import { VOICE_OPTIONS } from "./components/tts";
 import UploadPage from "./components/upload-page";
+import symbol from "@/assets/CoverMyPharmaSymbol.svg";
 
 type ActiveTab = "search" | "criteria" | "changes";
 
 interface UploadedAnalysis {
   patient_name?: unknown;
   medication_name?: unknown;
+  generic_name?: unknown;
+  conditions?: unknown;
   diagnosis?: unknown;
+  diagnosis_codes?: unknown;
   insurance_provider?: unknown;
   prior_auth_required?: boolean;
+  effective_date?: unknown;
+  coverage_effective_date?: unknown;
   summary?: unknown;
   missing_information?: unknown;
   recommended_next_steps?: unknown;
@@ -65,6 +71,8 @@ const TABS: { id: ActiveTab; label: string; icon: ReactNode }[] = [
     icon: <History className="w-4 h-4" aria-hidden="true" />,
   },
 ];
+
+const MAX_COMPARE_PLANS = 4;
 
 const diagnosisLabels = new Map(
   DIAGNOSIS_OPTIONS.map((option) => [option.value, option.label]),
@@ -102,6 +110,20 @@ function normalizeStringArray(value: unknown, fallback: string[] = []) {
   return parts.length > 0 ? parts : fallback;
 }
 
+function normalizeEffectiveDate(...values: unknown[]) {
+  for (const value of values) {
+    const text = normalizeText(value);
+    if (!text) continue;
+
+    const parsed = new Date(text);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toISOString().slice(0, 10);
+    }
+  }
+
+  return "";
+}
+
 function splitDiagnosisValues(diagnosis: unknown) {
   const values = flattenToStrings(diagnosis);
 
@@ -136,14 +158,16 @@ function transformBackendResponse(response: unknown): PlanCard | null {
   }
 
   const diagnosisCodes = splitDiagnosisValues(analysis.diagnosis);
+  const explicitDiagnosisCodes = normalizeStringArray(analysis.diagnosis_codes);
   const missingInformation = normalizeStringArray(
     analysis.missing_information,
   );
   const nextSteps = normalizeStringArray(analysis.recommended_next_steps);
   const summary = normalizeText(analysis.summary);
   const extractedText = normalizeText(payload.extracted_text);
-  const patientName = normalizeText(analysis.patient_name);
   const medicationName = normalizeText(analysis.medication_name);
+  const genericName = normalizeText(analysis.generic_name);
+  const conditions = normalizeText(analysis.conditions || analysis.diagnosis);
   const insuranceProvider = normalizeText(
     analysis.insurance_provider,
     "Uploaded payer",
@@ -163,20 +187,32 @@ function transformBackendResponse(response: unknown): PlanCard | null {
   ]
     .filter(Boolean)
     .join(" ");
+  const priorAuthRequirement = analysis.prior_auth_required == null
+    ? "Not available"
+    : analysis.prior_auth_required
+      ? "Required"
+      : "Not required";
+  const effectiveDate = normalizeEffectiveDate(
+    analysis.effective_date,
+    analysis.coverage_effective_date,
+  );
 
   return {
     id: crypto.randomUUID(),
     payer: insuranceProvider,
     drugName: medicationName || "Uploaded medication",
-    rxNormCode: patientName
-      ? `Policy analysis for ${patientName}`
-      : "Medical policy PDF analysis",
+    genericName: genericName || undefined,
+    conditions: conditions || "Not specified in uploaded PDF",
+    priorAuthRequirement,
+    rxNormCode: "Medical policy PDF analysis",
     coverageStatus: deriveCoverageStatus(analysis),
-    effectiveDate: new Date().toISOString().slice(0, 10),
-    effectiveDateLabel: "Analyzed",
+    effectiveDate,
+    effectiveDateLabel: "Coverage Effective",
     sourceLinkLabel: "Excerpt from uploaded PDF",
     hasSourceDocumentLink: false,
-    diagnosisCodes: diagnosisCodes.length
+    diagnosisCodes: explicitDiagnosisCodes.length
+      ? explicitDiagnosisCodes
+      : diagnosisCodes.length
       ? diagnosisCodes
       : ["Diagnosis not specified"],
     criteria: {
@@ -197,6 +233,7 @@ function transformBackendResponse(response: unknown): PlanCard | null {
 }
 
 export default function App() {
+  const { loginWithRedirect, logout, user, isAuthenticated } = useAuth0();
   const [activeTab, setActiveTab] = useState<ActiveTab>("search");
   const [uploadedPlans, setUploadedPlans] = useState<PlanCard[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
@@ -285,7 +322,7 @@ export default function App() {
     setCompareIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
-      else next.add(id);
+      else if (next.size < MAX_COMPARE_PLANS) next.add(id);
       return next;
     });
   };
@@ -325,26 +362,27 @@ export default function App() {
       </a>
 
       <header
-        className="border-b border-border bg-card sticky top-0 z-20"
+        className="flex items-center justify-between px-8 py-4 bg-transparent border-b border-white/20 shadow-lg transition-all duration-300"
         role="banner"
+        style={{
+          background: "#5b8db8",
+        }}
       >
-        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center gap-3">
-          <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-primary">
-            <Pill
-              className="w-5 h-5 text-primary-foreground"
-              aria-hidden="true"
-            />
-          </div>
-          <div>
-            <h1 className="leading-tight">CoverMyPharma</h1>
-            <p className="text-sm text-muted-foreground mb-0">
-              Medical Benefit Drug Policy Tracker
-            </p>
-          </div>
+        <div className="flex items-center gap-3">
+          <img
+            src={symbol}
+            alt="CoverMyPharma"
+            className="h-20 w-auto cursor-pointer hover:scale-105 transition-transform duration-200"
+            style={{ filter: "brightness(0) invert(1)" }}
+            onClick={() => setShowUpload(true)}
+          />
         </div>
 
-        <nav aria-label="Main navigation" className="max-w-7xl mx-auto px-4">
-          <div className="flex gap-0 border-b-0" role="tablist">
+        <nav
+          aria-label="Main navigation"
+          className="flex-1 flex justify-center"
+        >
+          <div className="flex flex-wrap items-center gap-3" role="tablist">
             {TABS.map((tab) => (
               <button
                 key={tab.id}
@@ -353,10 +391,10 @@ export default function App() {
                 aria-selected={activeTab === tab.id}
                 aria-controls={`panel-${tab.id}`}
                 onClick={() => setActiveTab(tab.id)}
-                className={`inline-flex items-center gap-2 px-4 py-3 min-h-[44px] text-sm border-b-2 transition-colors ${
+                className={`inline-flex items-center gap-2 px-4 py-2.5 min-h-[44px] text-sm rounded-lg border transition-colors ${
                   activeTab === tab.id
-                    ? "border-primary text-primary"
-                    : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
+                    ? "bg-[#3d3d3d] border-[#3d3d3d] text-white"
+                    : "border-white/25 text-white hover:bg-white/20"
                 }`}
               >
                 {tab.icon}
@@ -365,6 +403,40 @@ export default function App() {
             ))}
           </div>
         </nav>
+
+        <div className="flex items-center gap-3">
+          {isAuthenticated ? (
+            <>
+              <span className="text-sm text-white">Hello, {user?.name}</span>
+              <button
+                onClick={() =>
+                  logout({ logoutParams: { returnTo: window.location.origin } })
+                }
+                className="text-sm px-4 py-2 rounded-lg hover:bg-white/20 transition-all duration-200 hover:shadow-md text-white"
+              >
+                Log out
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={() => loginWithRedirect()}
+                className="text-sm px-4 py-2 rounded-lg hover:bg-white/20 transition-all duration-200 hover:shadow-md text-white"
+              >
+                Sign in
+              </button>
+              <button
+                onClick={() => loginWithRedirect()}
+                className="text-sm font-medium px-4 py-2 rounded-lg text-white hover:opacity-90 transition-all duration-200 hover:shadow-md"
+                style={{
+                  background: "#3d3d3d",
+                }}
+              >
+                Get started
+              </button>
+            </>
+          )}
+        </div>
       </header>
 
       <main id="main-content" className="flex-1">
@@ -478,6 +550,11 @@ export default function App() {
                 <span className="ml-auto flex items-center gap-2 text-primary">
                   <GitCompareArrows className="w-4 h-4" aria-hidden="true" />
                   {compareIds.size} selected for comparison
+                  {compareIds.size === MAX_COMPARE_PLANS && (
+                    <span className="text-sm text-muted-foreground">
+                      Max {MAX_COMPARE_PLANS}
+                    </span>
+                  )}
                   {compareIds.size >= 2 && (
                     <span className="text-sm bg-primary text-primary-foreground px-2 py-0.5 rounded-full">
                       Diff Active
@@ -528,6 +605,10 @@ export default function App() {
                       plan={plan}
                       isSelected={selectedCardId === plan.id}
                       isCompareChecked={compareIds.has(plan.id)}
+                      isCompareDisabled={
+                        compareIds.size >= MAX_COMPARE_PLANS &&
+                        !compareIds.has(plan.id)
+                      }
                       onSelect={(id) =>
                         setSelectedCardId(selectedCardId === id ? null : id)
                       }

@@ -15,6 +15,20 @@ dist-ssr
 __pycache__/
 *.pyc
 
+# Env (Vite / Node — never commit secrets)
+.env
+.env.*
+!.env.example
+
+# Python (FastAPI lives in ./app)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
