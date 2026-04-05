@@ -31,6 +31,7 @@ interface UploadedFile {
   name: string;
   size: number;
   status: "uploading" | "processing" | "done" | "error";
+  errorMessage?: string;
 }
 
 interface UploadPageProps {
@@ -46,7 +47,7 @@ const FEATURES = [
   {
     icon: <TrendingUp className="w-4 h-4" />,
     title: "Cross-payer comparison",
-    desc: "See Aetna vs UHC vs Cigna side by side in one matrix — no more hunting through separate documents.",
+    desc: "See company coverage information side by side in one matrix — no more hunting through separate documents.",
   },
   {
     icon: <Shield className="w-4 h-4" />,
@@ -54,6 +55,22 @@ const FEATURES = [
     desc: "Every policy update is timestamped and recorded on-chain so you always know what changed and when.",
   },
 ];
+
+const FIELD_LABELS: Record<string, string> = {
+  drugName: "Drug Name / Generic Name",
+  conditions: "Conditions / Diagnoses",
+  priorAuthRequired: "Prior Auth Requirement",
+  clinicalCriteria: "Clinical Criteria",
+  diagnosisCodes: "Diagnosis Codes",
+  effectiveDate: "Effective Date",
+};
+
+function normalizeMissingField(field: string) {
+  return (
+    FIELD_LABELS[field] ??
+    field.replace(/([A-Z])/g, " $1").replace(/^./, (s) => s.toUpperCase())
+  );
+}
 
 function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
@@ -95,37 +112,92 @@ export default function UploadPage({ onContinue }: UploadPageProps) {
         }
         const base64Data = btoa(binary);
 
-        if (import.meta.env.DEV) {
-          const genAI = new GoogleGenerativeAI(
-            import.meta.env.VITE_GEMINI_API_KEY,
-          );
-          const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-          const result = await model.generateContent([
-            "Extract coverage rules, PA criteria, and diagnosis codes from this PDF.",
-            {
-              inlineData: { data: base64Data, mimeType: "application/pdf" },
-            },
-          ]);
-          console.log("✓ PDF parsed successfully");
+        // Always use frontend Gemini call (hackathon mode)
+        const genAI = new GoogleGenerativeAI(
+          import.meta.env.VITE_GEMINI_API_KEY,
+        );
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const result = await model.generateContent([
+          `Analyze this PDF document and extract the following required fields for pharmaceutical coverage/policy information. Return a JSON object with this exact structure:
+
+{
+  "validation": {
+    "isValid": boolean,
+    "missingFields": string[] (list of missing required fields)
+  },
+  "data": {
+    "drugName": "string or null",
+    "conditions": "string or null", 
+    "priorAuthRequired": "string or null",
+    "clinicalCriteria": "string or null",
+    "diagnosisCodes": "string or null",
+    "effectiveDate": "string or null"
+  }
+}
+
+Required fields to check for:
+- Drug Name/generic Name
+- Conditions/Diagnoses
+- Prior Auth Req for Drug  
+- Clinical Criteria
+- Diagnosis Codes
+- Effective date
+
+Set isValid to true only if ALL required fields are present and contain meaningful content. If any field is missing or empty, set isValid to false and list the missing fields in missingFields array.`,
+          {
+            inlineData: { data: base64Data, mimeType: "application/pdf" },
+          },
+        ]);
+
+        const response = await result.response;
+        const text = await response.text();
+        console.log("Gemini response:", text);
+
+        try {
+          // Extract JSON from markdown code blocks if present
+          let jsonText = text.trim();
+
+          // Check if response is wrapped in ```json ... ```
+          const jsonMatch = jsonText.match(/```json\s*(\{[\s\S]*?\})\s*```/);
+          if (jsonMatch) {
+            jsonText = jsonMatch[1];
+          } else {
+            // Try to find JSON object directly
+            const jsonStart = jsonText.indexOf("{");
+            const jsonEnd = jsonText.lastIndexOf("}");
+            if (jsonStart !== -1 && jsonEnd !== -1 && jsonEnd > jsonStart) {
+              jsonText = jsonText.substring(jsonStart, jsonEnd + 1);
+            }
+          }
+
+          // Parse the JSON response
+          const parsed = JSON.parse(jsonText);
+
+          if (!parsed.validation?.isValid) {
+            const missing = parsed.validation?.missingFields || [
+              "unknown fields",
+            ];
+            const friendlyFields = missing.map(normalizeMissingField);
+            throw new Error(
+              `PDF validation failed. Missing required fields: ${friendlyFields.join(", ")}. Please upload a complete pharmaceutical coverage/policy document.`,
+            );
+          }
+
+          console.log("✓ PDF validated and parsed successfully");
           setFiles((prev) =>
             prev.map((f) => (f.id === fileId ? { ...f, status: "done" } : f)),
           );
-          return;
+        } catch (parseErr) {
+          console.error("✗ PDF validation failed:", parseErr);
+          const errorMessage =
+            parseErr instanceof Error ? parseErr.message : String(parseErr);
+
+          setFiles((prev) =>
+            prev.map((f) =>
+              f.id === fileId ? { ...f, status: "error", errorMessage } : f,
+            ),
+          );
         }
-
-        // Production
-        const token = await getAccessTokenSilently();
-        const res = await fetch("/api/parse-pdf", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ fileData: base64Data, accessToken: token }),
-        });
-
-        if (!res.ok) throw new Error("API error");
-        console.log("✓ PDF parsed successfully");
-        setFiles((prev) =>
-          prev.map((f) => (f.id === fileId ? { ...f, status: "done" } : f)),
-        );
       } catch (err) {
         console.error("✗ PDF processing failed:", err);
         setFiles((prev) =>
@@ -135,7 +207,7 @@ export default function UploadPage({ onContinue }: UploadPageProps) {
         processingRef.current.delete(fileId);
       }
     },
-    [getAccessTokenSilently],
+    [],
   );
 
   const addFiles = useCallback(
@@ -212,6 +284,7 @@ export default function UploadPage({ onContinue }: UploadPageProps) {
                 Sign in
               </button>
               <button
+                onClick={() => loginWithRedirect()}
                 className="text-sm font-medium px-4 py-2 rounded-lg text-white hover:opacity-90 transition-all duration-200 hover:shadow-md"
                 style={{
                   background: "#3d3d3d",
@@ -220,6 +293,20 @@ export default function UploadPage({ onContinue }: UploadPageProps) {
                 Get started
               </button>
             </>
+          )}
+          {isAuthenticated && (
+            <button
+              onClick={onContinue}
+              disabled={doneCount === 0}
+              className="text-sm font-medium px-4 py-2 rounded-lg transition-all duration-200"
+              style={{
+                background: doneCount > 0 ? "#3d3d3d" : "#9ca3af",
+                color: doneCount > 0 ? "white" : "#d1d5db",
+                cursor: doneCount > 0 ? "pointer" : "not-allowed",
+              }}
+            >
+              {doneCount > 0 ? "Continue to analysis" : "Upload docs first"}
+            </button>
           )}
         </div>
       </header>
@@ -286,7 +373,7 @@ export default function UploadPage({ onContinue }: UploadPageProps) {
               className="text-xl font-semibold mb-1"
               style={{ color: "#3d3d3d" }}
             >
-              Upload policy documents
+              UPLOAD POLICY DOCUMENTS
             </h2>
             <p className="text-sm mb-6" style={{ color: "#9ca3af" }}>
               PDF files only · Multiple files supported
@@ -398,6 +485,12 @@ export default function UploadPage({ onContinue }: UploadPageProps) {
                           {formatBytes(f.size)}
                         </span>
                       </div>
+                      {f.status === "error" && f.errorMessage && (
+                        <div className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-700">
+                          <p className="font-semibold">PDF validation failed</p>
+                          <p className="mt-1 break-words">{f.errorMessage}</p>
+                        </div>
+                      )}
                     </div>
                     <button
                       onClick={() => removeFile(f.id)}
@@ -432,20 +525,6 @@ export default function UploadPage({ onContinue }: UploadPageProps) {
                 "Upload at least one PDF to continue"
               )}
             </button>
-
-            <p
-              className="text-center text-xs mt-4"
-              style={{ color: "#9ca3af" }}
-            >
-              No account required to try ·{" "}
-              <span
-                className="underline cursor-pointer"
-                style={{ color: "#5b8db8" }}
-              >
-                Sign in
-              </span>{" "}
-              to save results
-            </p>
           </div>
         )}
 
