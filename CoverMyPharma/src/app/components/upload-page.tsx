@@ -18,6 +18,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { useAuth0 } from "@auth0/auth0-react";
+import type { ParsePdfResponse } from "@/app/lib/plan-transform";
 import { hasSupabaseConfig, supabase } from "@/lib/supabase";
 import { useSupabaseUser } from "@/hooks/useSupabaseUser";
 
@@ -34,21 +35,10 @@ interface UploadedFile {
 
 interface UploadPageProps {
   onContinue: () => void;
-  onUploadSuccess: (data: unknown) => void;
-}
-
-interface ParsedAnalysis {
-  patient_name?: unknown;
-  medication_name?: unknown;
-  diagnosis?: unknown;
-  prior_auth_required?: boolean;
-  summary?: unknown;
-}
-
-interface ParsePdfResponse {
-  success?: boolean;
-  extracted_text?: unknown;
-  analysis?: ParsedAnalysis;
+  onUploadSuccess: (
+    data: unknown,
+    meta?: { documentId?: string; filename?: string },
+  ) => void;
 }
 
 const FEATURES = [
@@ -69,7 +59,8 @@ const FEATURES = [
   },
 ];
 
-const COMPARISON_REDIRECT_KEY = "cover-my-pharma:comparison-redirect";
+/** After login, continue to the main app (comparison / coverage search). */
+const POST_LOGIN_CONTINUE_KEY = "cmp_post_login_continue_to_app";
 
 function flattenToStrings(value: unknown): string[] {
   if (value == null) return [];
@@ -118,32 +109,34 @@ export default function UploadPage({
   useSupabaseUser();
 
   useEffect(() => {
-    if (!isAuthenticated) {
-      return;
+    if (!isAuthenticated) return;
+    try {
+      if (sessionStorage.getItem(POST_LOGIN_CONTINUE_KEY) === "1") {
+        sessionStorage.removeItem(POST_LOGIN_CONTINUE_KEY);
+        onContinue();
+      }
+    } catch {
+      /* sessionStorage unavailable */
     }
-
-    if (window.sessionStorage.getItem(COMPARISON_REDIRECT_KEY) !== "true") {
-      return;
-    }
-
-    window.sessionStorage.removeItem(COMPARISON_REDIRECT_KEY);
-    onContinue();
   }, [isAuthenticated, onContinue]);
 
-  const handleComparisonRedirect = useCallback(() => {
+  const handleViewComparison = useCallback(() => {
     if (isAuthenticated) {
       onContinue();
       return;
     }
-
-    window.sessionStorage.setItem(COMPARISON_REDIRECT_KEY, "true");
+    try {
+      sessionStorage.setItem(POST_LOGIN_CONTINUE_KEY, "1");
+    } catch {
+      /* sessionStorage unavailable */
+    }
     loginWithRedirect();
   }, [isAuthenticated, loginWithRedirect, onContinue]);
 
   const persistUploadedDocument = useCallback(
     async (file: File, responseData: ParsePdfResponse) => {
       if (!hasSupabaseConfig || !supabase || !user?.sub) {
-        return;
+        return undefined;
       }
 
       const { data: userData, error: userError } = await supabase
@@ -168,25 +161,34 @@ export default function UploadPage({
       const medication = normalizeText(analysis?.medication_name);
       const summary = normalizeText(analysis?.summary);
 
-      const { error: docError } = await supabase.from("medical_documents").insert({
-        user_id: userData.id,
-        filename: file.name,
-        file_size: file.size,
-        drug_name: medication || null,
-        conditions: diagnosis || null,
-        prior_auth_required:
-          analysis?.prior_auth_required == null
-            ? null
-            : String(analysis.prior_auth_required),
-        clinical_criteria: summary || null,
-        diagnosis_codes: diagnosis || null,
-        effective_date: null,
-        raw_extracted_data: responseData,
-      });
+      const { data: inserted, error: docError } = await supabase
+        .from("medical_documents")
+        .insert({
+          user_id: userData.id,
+          filename: file.name,
+          file_size: file.size,
+          drug_name: medication || null,
+          conditions: diagnosis || null,
+          prior_auth_required:
+            analysis?.prior_auth_required == null
+              ? null
+              : String(analysis.prior_auth_required),
+          clinical_criteria: summary || null,
+          diagnosis_codes: diagnosis || null,
+          effective_date: null,
+          policy_changes: Array.isArray(analysis?.policy_changes)
+            ? analysis.policy_changes
+            : [],
+          raw_extracted_data: responseData,
+        })
+        .select()
+        .single();
 
       if (docError) {
         throw docError;
       }
+
+      return inserted?.id as string | undefined;
     },
     [user],
   );
@@ -209,22 +211,16 @@ export default function UploadPage({
         const formData = new FormData();
         formData.append("file", file);
 
-        // Dev: same-origin `/api/*` is proxied to FastAPI (:8000) by Vite — never use the TTS port (:3001).
-        const parsePdfUrl = import.meta.env.DEV
-          ? "/api/parse-pdf"
-          : new URL(
-              "/api/parse-pdf",
-              import.meta.env.VITE_API_BASE_URL?.trim() ||
-                window.location.origin,
-            ).href;
-
-        const res = await fetch(parsePdfUrl, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
+        const res = await fetch(
+          `${import.meta.env.VITE_API_BASE_URL}/api/parse-pdf`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+            body: formData,
           },
-          body: formData,
-        });
+        );
 
         const data = (await res.json()) as ParsePdfResponse & {
           detail?: string;
@@ -237,13 +233,14 @@ export default function UploadPage({
           );
         }
 
-        onUploadSuccess(data);
-
+        let documentId: string | undefined;
         try {
-          await persistUploadedDocument(file, data);
+          documentId = await persistUploadedDocument(file, data);
         } catch (persistError) {
           console.warn("Supabase persistence skipped:", persistError);
         }
+
+        onUploadSuccess(data, { documentId, filename: file.name });
 
         setFiles((prev) =>
           prev.map((f) => (f.id === fileId ? { ...f, status: "done" } : f)),
@@ -318,8 +315,14 @@ export default function UploadPage({
 
         <div className="flex items-center gap-3">
           <button
-            onClick={handleComparisonRedirect}
+            type="button"
+            onClick={handleViewComparison}
             className="text-sm px-4 py-2 rounded-lg transition-all duration-200 hover:shadow-md text-white border border-white/25 hover:bg-white/20"
+            aria-label={
+              isAuthenticated
+                ? "Open coverage comparison and search"
+                : "Sign in to open coverage comparison and search"
+            }
           >
             Coverage comparison
           </button>

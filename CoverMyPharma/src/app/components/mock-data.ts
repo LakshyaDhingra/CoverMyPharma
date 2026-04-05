@@ -53,6 +53,36 @@ export function getPlanPriorAuthRequirement(plan: PlanCard) {
   }
 }
 
+/** Table-friendly clinical block: prefer stored upload text, else compose structured criteria. */
+export function getPlanClinicalCriteria(plan: PlanCard) {
+  const direct = plan.clinicalCriteria?.trim();
+  if (direct) return direct;
+  const c = plan.criteria;
+  return [
+    c.trialDuration && `Trial duration: ${c.trialDuration}`,
+    c.labRequirements.length > 0 &&
+      `Lab requirements: ${c.labRequirements.join("; ")}`,
+    c.ageLimit && `Age limit: ${c.ageLimit}`,
+    c.diagnosisRequirement && `Diagnosis requirement: ${c.diagnosisRequirement}`,
+    c.additionalNotes && `Additional notes: ${c.additionalNotes}`,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+/** Single-line medication label: brand plus generic when distinct. */
+export function formatPlanDrugHeading(plan: PlanCard): string {
+  const brand = plan.drugName?.trim() ?? "";
+  const gen = plan.genericName?.trim();
+  if (!brand && !gen) return "Unknown medication";
+  if (!gen) return brand;
+  if (!brand) return gen;
+  if (gen.toLowerCase() === brand.toLowerCase()) return brand;
+  if (brand.toLowerCase().includes(gen.toLowerCase())) return brand;
+  if (gen.toLowerCase().includes(brand.toLowerCase())) return gen;
+  return `${brand} (${gen})`;
+}
+
 export const DIAGNOSIS_OPTIONS: DiagnosisOption[] = [
   { value: "C34.90", label: "C34.90 — Non-small cell lung cancer" },
   { value: "C43.9", label: "C43.9 — Malignant melanoma" },
@@ -70,6 +100,7 @@ export const MOCK_PLANS: PlanCard[] = [
     id: "aetna-keytruda",
     payer: "Aetna",
     drugName: "Keytruda",
+    genericName: "pembrolizumab",
     rxNormCode: "RxNorm:1657973",
     coverageStatus: "Prior Auth Required",
     effectiveDate: "2026-01-01",
@@ -88,6 +119,7 @@ export const MOCK_PLANS: PlanCard[] = [
     id: "uhc-keytruda",
     payer: "UHC",
     drugName: "Keytruda",
+    genericName: "pembrolizumab",
     rxNormCode: "RxNorm:1657973",
     coverageStatus: "Prior Auth Required",
     effectiveDate: "2026-01-15",
@@ -106,6 +138,7 @@ export const MOCK_PLANS: PlanCard[] = [
     id: "cigna-keytruda",
     payer: "Cigna",
     drugName: "Keytruda",
+    genericName: "pembrolizumab",
     rxNormCode: "RxNorm:1657973",
     coverageStatus: "Preferred",
     effectiveDate: "2025-07-01",
@@ -125,6 +158,7 @@ export const MOCK_PLANS: PlanCard[] = [
     id: "aetna-humira",
     payer: "Aetna",
     drugName: "Humira",
+    genericName: "adalimumab",
     rxNormCode: "RxNorm:327361",
     coverageStatus: "Step Therapy",
     effectiveDate: "2026-01-01",
@@ -143,6 +177,7 @@ export const MOCK_PLANS: PlanCard[] = [
     id: "uhc-humira",
     payer: "UHC",
     drugName: "Humira",
+    genericName: "adalimumab",
     rxNormCode: "RxNorm:327361",
     coverageStatus: "Prior Auth Required",
     effectiveDate: "2026-02-01",
@@ -161,6 +196,7 @@ export const MOCK_PLANS: PlanCard[] = [
     id: "cigna-humira",
     payer: "Cigna",
     drugName: "Humira",
+    genericName: "adalimumab",
     rxNormCode: "RxNorm:327361",
     coverageStatus: "Not Covered",
     effectiveDate: "2026-01-01",
@@ -180,6 +216,7 @@ export const MOCK_PLANS: PlanCard[] = [
     id: "aetna-ocrevus",
     payer: "Aetna",
     drugName: "Ocrevus",
+    genericName: "ocrelizumab",
     rxNormCode: "RxNorm:1927830",
     coverageStatus: "Prior Auth Required",
     effectiveDate: "2026-01-01",
@@ -198,6 +235,7 @@ export const MOCK_PLANS: PlanCard[] = [
     id: "uhc-ocrevus",
     payer: "UHC",
     drugName: "Ocrevus",
+    genericName: "ocrelizumab",
     rxNormCode: "RxNorm:1927830",
     coverageStatus: "Covered with Limits",
     effectiveDate: "2026-03-01",
@@ -216,6 +254,7 @@ export const MOCK_PLANS: PlanCard[] = [
     id: "cigna-ocrevus",
     payer: "Cigna",
     drugName: "Ocrevus",
+    genericName: "ocrelizumab",
     rxNormCode: "RxNorm:1927830",
     coverageStatus: "Preferred",
     effectiveDate: "2025-10-01",
@@ -235,6 +274,7 @@ export const MOCK_PLANS: PlanCard[] = [
     id: "aetna-stelara",
     payer: "Aetna",
     drugName: "Stelara",
+    genericName: "ustekinumab",
     rxNormCode: "RxNorm:897122",
     coverageStatus: "Prior Auth Required",
     effectiveDate: "2026-01-01",
@@ -253,6 +293,7 @@ export const MOCK_PLANS: PlanCard[] = [
     id: "uhc-stelara",
     payer: "UHC",
     drugName: "Stelara",
+    genericName: "ustekinumab",
     rxNormCode: "RxNorm:897122",
     coverageStatus: "Step Therapy",
     effectiveDate: "2026-01-15",
@@ -271,6 +312,7 @@ export const MOCK_PLANS: PlanCard[] = [
     id: "cigna-stelara",
     payer: "Cigna",
     drugName: "Stelara",
+    genericName: "ustekinumab",
     rxNormCode: "RxNorm:897122",
     coverageStatus: "Covered with Limits",
     effectiveDate: "2026-01-01",
@@ -314,6 +356,7 @@ export const QUARTERS: QuarterOption[] = [
   { value: "2026-Q1", label: "Q1 2026 (Jan–Mar)" },
   { value: "2025-Q4", label: "Q4 2025 (Oct–Dec)" },
   { value: "2025-Q3", label: "Q3 2025 (Jul–Sep)" },
+  { value: "Unknown", label: "Undated / unknown quarter" },
 ];
 
 export const MOCK_POLICY_CHANGES: PolicyChange[] = [

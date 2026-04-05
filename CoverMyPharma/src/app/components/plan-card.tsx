@@ -4,10 +4,19 @@ import {
   PAYER_COLORS,
   DEFAULT_PAYER_STYLE,
   STATUS_STYLES,
+  formatPlanDrugHeading,
   getPlanConditions,
   getPlanPriorAuthRequirement,
 } from "./mock-data";
 import { formatEffectiveDate } from "./tts";
+
+function truncateSectionText(text: string, maxLength: number) {
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  return `${text.slice(0, maxLength).trimEnd()}...`;
+}
 
 interface PlanCardProps {
   plan: PlanCard;
@@ -31,13 +40,21 @@ export function PlanSnapshotCard({
   const effectiveDateLabel = plan.effectiveDateLabel ?? "Effective";
   const conditions = getPlanConditions(plan);
   const priorAuthRequirement = getPlanPriorAuthRequirement(plan);
+  const drugHeading = truncateSectionText(formatPlanDrugHeading(plan), 56);
+  const truncatedConditions = truncateSectionText(conditions, 70);
+  const truncatedPriorAuthRequirement = truncateSectionText(
+    priorAuthRequirement,
+    42,
+  );
+  const visibleDiagnosisCodes = plan.diagnosisCodes.slice(0, 3);
+  const hiddenDiagnosisCodeCount = Math.max(plan.diagnosisCodes.length - 3, 0);
 
   return (
     <div
       role="button"
       tabIndex={0}
       aria-pressed={isSelected}
-      aria-label={`${plan.drugName} - ${plan.payer} - ${plan.coverageStatus}. Press Enter to view details.`}
+      aria-label={`${formatPlanDrugHeading(plan)} - ${plan.payer} - ${plan.coverageStatus}. Press Enter to view details.`}
       className={`relative rounded-xl border-2 p-5 cursor-pointer transition-all min-h-[180px] flex flex-col ${
         isSelected
           ? "border-primary shadow-lg ring-2 ring-primary/40"
@@ -67,7 +84,7 @@ export function PlanSnapshotCard({
               onCompareToggle(plan.id);
             }}
             className="sr-only peer"
-            aria-label={`Select ${plan.drugName} (${plan.payer}) for comparison`}
+            aria-label={`Select ${formatPlanDrugHeading(plan)} (${plan.payer}) for comparison`}
           />
           <span
             className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors peer-focus-visible:outline peer-focus-visible:outline-3 peer-focus-visible:outline-primary peer-focus-visible:outline-offset-2 ${
@@ -92,17 +109,20 @@ export function PlanSnapshotCard({
         {plan.payer}
       </span>
 
-      <h3 className="mt-2 mb-0">{plan.drugName}</h3>
-      {plan.genericName && (
-        <p className="text-sm text-muted-foreground mt-0.5 mb-0">
-          Generic: {plan.genericName}
-        </p>
-      )}
-      <p className="text-sm text-muted-foreground mt-0.5 mb-0">
-        Conditions: {conditions}
+      <h3 className="mt-2 mb-0" title={formatPlanDrugHeading(plan)}>
+        {drugHeading}
+      </h3>
+      <p
+        className="text-sm text-muted-foreground mt-0.5 mb-0"
+        title={conditions}
+      >
+        Conditions: {truncatedConditions}
       </p>
-      <p className="text-sm text-muted-foreground mt-1 mb-0">
-        Prior Auth: {priorAuthRequirement}
+      <p
+        className="text-sm text-muted-foreground mt-1 mb-0"
+        title={priorAuthRequirement}
+      >
+        Prior Auth: {truncatedPriorAuthRequirement}
       </p>
 
       <span
@@ -121,7 +141,7 @@ export function PlanSnapshotCard({
         className="flex flex-wrap gap-1 mt-2"
         aria-label="Applicable diagnosis codes"
       >
-        {plan.diagnosisCodes.map((code) => (
+        {visibleDiagnosisCodes.map((code) => (
           <span
             key={code}
             className="text-xs px-1.5 py-0.5 bg-muted rounded text-foreground"
@@ -129,6 +149,14 @@ export function PlanSnapshotCard({
             {code}
           </span>
         ))}
+        {hiddenDiagnosisCodeCount > 0 && (
+          <span
+            className="text-xs px-1.5 py-0.5 bg-muted rounded text-foreground"
+            title={plan.diagnosisCodes.join(", ")}
+          >
+            +{hiddenDiagnosisCodeCount} more
+          </span>
+        )}
       </div>
 
       <div className="mt-auto pt-3 flex items-center gap-1 text-sm text-primary">
