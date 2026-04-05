@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+python-dotenv
+python-multipart
+PyPDF2
+python-jose[cryptography]
+requests
+google-generativeai
