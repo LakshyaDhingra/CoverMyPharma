@@ -88,7 +88,6 @@ export default function UploadPage({ onContinue }: UploadPageProps) {
     logout,
     user,
     isAuthenticated,
-    getAccessTokenSilently,
   } = useAuth0();
 
   const handlePdfProcessing = useCallback(
@@ -363,6 +362,16 @@ Set isValid to true only if ALL required fields are present and contain meaningf
             >
               Sign in now
             </button>
+            <button
+              onClick={onContinue}
+              className="mt-3 px-8 py-3 rounded-lg font-medium transition-all border border-gray-200 hover:shadow-lg"
+              style={{
+                background: "#ffffff",
+                color: "#3d3d3d",
+              }}
+            >
+              Temporary bypass to comparison
+            </button>
           </div>
         )}
 
@@ -524,6 +533,17 @@ Set isValid to true only if ALL required fields are present and contain meaningf
               ) : (
                 "Upload at least one PDF to continue"
               )}
+            </button>
+
+            <button
+              onClick={onContinue}
+              className="mt-3 w-full py-3 rounded-xl text-sm font-medium transition-all border border-gray-200 hover:shadow-md"
+              style={{
+                background: "#ffffff",
+                color: "#3d3d3d",
+              }}
+            >
+              Temporary bypass to comparison
             </button>
           </div>
         )}

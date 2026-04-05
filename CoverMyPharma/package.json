@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "tts:server": "node --env-file=.env server/tts-server.mjs"
   },
   "dependencies": {
     "@auth0/auth0-react": "^2.16.1",
