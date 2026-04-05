@@ -58,6 +58,8 @@ export interface Database {
           clinical_criteria: string | null;
           diagnosis_codes: string | null;
           effective_date: string | null;
+          /** Normalized policy change rows from parser (JSON array) */
+          policy_changes: unknown | null;
           raw_extracted_data: any;
         };
         Insert: {
@@ -72,6 +74,7 @@ export interface Database {
           clinical_criteria?: string | null;
           diagnosis_codes?: string | null;
           effective_date?: string | null;
+          policy_changes?: unknown;
           raw_extracted_data?: any;
         };
         Update: {
@@ -86,6 +89,7 @@ export interface Database {
           clinical_criteria?: string | null;
           diagnosis_codes?: string | null;
           effective_date?: string | null;
+          policy_changes?: unknown;
           raw_extracted_data?: any;
         };
       };

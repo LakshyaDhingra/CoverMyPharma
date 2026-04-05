@@ -1,239 +1,396 @@
-import type { CoverageStatus, PlanCard } from "@/app/components/types";
+import type {
+  CoverageStatus,
+  PlanCard,
+  PolicyChange,
+} from "@/app/components/types";
 import type { Database } from "@/lib/supabase";
+
+export type MedicalDocumentRow = Database["public"]["Tables"]["medical_documents"]["Row"];
 
 export interface UploadedAnalysis {
   patient_name?: unknown;
   medication_name?: unknown;
+  generic_name?: unknown;
   diagnosis?: unknown;
   insurance_provider?: unknown;
-  prior_auth_required?: boolean;
+  prior_auth_required?: unknown;
   summary?: unknown;
   missing_information?: unknown;
   recommended_next_steps?: unknown;
+  /** Array of change objects from Gemini (snake_case keys) */
+  policy_changes?: unknown;
 }
 
 export interface ParsePdfResponse {
   success?: boolean;
-  extracted_text?: unknown;
   analysis?: UploadedAnalysis;
+  extracted_text?: unknown;
 }
 
-type MedicalDocumentRow = Database["public"]["Tables"]["medical_documents"]["Row"];
-
-function truncateText(text: string, maxLength = 240) {
-  if (text.length <= maxLength) return text;
-  return `${text.slice(0, maxLength).trimEnd()}...`;
-}
-
-export function flattenToStrings(value: unknown): string[] {
+function flattenToStrings(value: unknown): string[] {
   if (value == null) return [];
-
   if (Array.isArray(value)) {
     return value.flatMap((item) => flattenToStrings(item));
   }
-
   if (typeof value === "object") {
     return Object.values(value as Record<string, unknown>).flatMap((item) =>
       flattenToStrings(item),
     );
   }
-
   const normalized = String(value).trim();
   return normalized ? [normalized] : [];
 }
 
-export function normalizeText(value: unknown, fallback = "") {
+function normalizeText(value: unknown, fallback = "") {
   const parts = flattenToStrings(value);
   return parts.length > 0 ? parts.join("; ") : fallback;
 }
 
-export function normalizeStringArray(value: unknown, fallback: string[] = []) {
-  const parts = flattenToStrings(value);
-  return parts.length > 0 ? parts : fallback;
+/** True when trailing "(...)" looks like a model explanation, not a real plan name. */
+function isExplanatoryPayerParenthetical(inner: string): boolean {
+  const t = inner.trim().toLowerCase();
+  if (!t) return false;
+  if (/^(unspecified(\s+name)?|unknown|not\s+specified|n\/a)\b/.test(t)) {
+    return true;
+  }
+  if (t.includes("generic name") && t.includes("provider")) return true;
+  if (t.includes("no specific provider")) return true;
+  if (t.includes("not provided") && t.includes("provider")) return true;
+  return false;
 }
 
-function splitDiagnosisValues(diagnosis: unknown) {
-  const values = flattenToStrings(diagnosis);
-
-  return values
-    .flatMap((value) => value.split(/[,;/]/))
-    .map((value) => value.trim())
-    .filter(Boolean);
+/** Strip model-invented parentheticals (e.g. "Health Plan (unspecified name)"). */
+function sanitizePayerDisplay(raw: string): string {
+  let s = raw.trim().replace(/\s+/g, " ");
+  if (!s) return "";
+  let prev: string;
+  do {
+    prev = s;
+    const m = s.match(/^(.*?)\s*\(([^)]+)\)\s*$/);
+    if (m && isExplanatoryPayerParenthetical(m[2]!)) {
+      s = m[1]!.trim();
+      continue;
+    }
+    const junkSuffix =
+      /\s*\((?:unspecified\s+name|unspecified|unknown|not\s+specified|n\/a)\)\s*$/i;
+    s = s.replace(junkSuffix, "").trim();
+  } while (s !== prev);
+  return s;
 }
 
-function normalizePlanDate(value?: string | null) {
-  const parsed = value ? new Date(value) : new Date();
-  if (Number.isNaN(parsed.getTime())) {
-    return new Date().toISOString().slice(0, 10);
-  }
-
-  return parsed.toISOString().slice(0, 10);
+/** Shorten legal-style suffixes on payer names (e.g. "Cigna Companies" -> "Cigna"). */
+function normalizePayerBrand(s: string): string {
+  let t = s.trim().replace(/\s+/g, " ");
+  if (!t) return "";
+  t = t.replace(/\s+Companies\s*$/i, "").trim();
+  t = t.replace(/\s+Company\s*$/i, "").trim();
+  return t;
 }
 
-function deriveCoverageStatus(
-  analysis: UploadedAnalysis,
-  storedPriorAuthRequired?: string | null,
-): CoverageStatus {
-  if (analysis.prior_auth_required) {
-    return "Prior Auth Required";
-  }
+const DEFAULT_PAYER_LABEL = "Health Plan";
 
-  if (storedPriorAuthRequired?.toLowerCase() === "true") {
-    return "Prior Auth Required";
-  }
-
-  if (normalizeStringArray(analysis.missing_information).length > 0) {
-    return "Covered with Limits";
-  }
-
-  return "Preferred";
+function formatPayerForDisplay(raw: string): string {
+  const cleaned = normalizePayerBrand(sanitizePayerDisplay(raw));
+  return cleaned || DEFAULT_PAYER_LABEL;
 }
 
-export function transformBackendResponse(response: unknown): PlanCard | null {
-  if (!response || typeof response !== "object") {
-    return null;
+/**
+ * Reduce verbose parser/PDF medication strings to a recognizable brand/common name.
+ */
+export function shortenMedicationName(raw: string): string {
+  let s = raw.trim();
+  if (!s) return s;
+
+  const firstClause = s.split(/[;]/)[0]?.trim() ?? s;
+  s = firstClause;
+
+  if (s.includes("—")) {
+    s = s.split("—")[0]!.trim();
+  } else if (s.length > 72 && s.includes(" - ")) {
+    s = s.split(" - ")[0]!.trim();
   }
 
-  const payload = response as ParsePdfResponse;
-  const analysis = payload.analysis;
-
-  if (!analysis) {
-    return null;
+  if (s.length > 56) {
+    s = s
+      .replace(
+        /\s*\([^)]*(?:tablet|capsule|caplet|injection|injectable|prefilled|syringe|vial|pen|mg\/|mcg\/|\d+\s*mg)[^)]*\)\s*$/i,
+        "",
+      )
+      .trim();
   }
 
-  const diagnosisCodes = splitDiagnosisValues(analysis.diagnosis);
-  const missingInformation = normalizeStringArray(
-    analysis.missing_information,
-  );
-  const nextSteps = normalizeStringArray(analysis.recommended_next_steps);
-  const summary = normalizeText(analysis.summary);
-  const extractedText = normalizeText(payload.extracted_text);
-  const patientName = normalizeText(analysis.patient_name);
-  const medicationName = normalizeText(analysis.medication_name);
-  const insuranceProvider = normalizeText(
-    analysis.insurance_provider,
-    "Uploaded payer",
-  );
-  const diagnosisRequirement = normalizeText(
-    analysis.diagnosis,
-    "Not specified in uploaded PDF",
-  );
-  const sourceSnippet = summary || extractedText
-    ? truncateText(summary || extractedText || "")
-    : "No source excerpt was returned from the uploaded PDF.";
-  const additionalNotes = [
-    summary,
-    nextSteps.length
-      ? `Recommended next steps: ${nextSteps.join("; ")}`
-      : "No recommended next steps were returned.",
-  ]
-    .filter(Boolean)
-    .join(" ");
+  s = s.replace(/\s+/g, " ").trim();
+  if (s.length > 72) {
+    s = `${s.slice(0, 69).trimEnd()}…`;
+  }
+  return s;
+}
 
+function extractIcdCodes(text: string): string[] {
+  const re = /\b([A-TV-Z][0-9]{2}(?:\.[0-9A-Za-z]{1,4})?)\b/g;
+  const out: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    out.push(m[1]!);
+  }
+  return [...new Set(out)];
+}
+
+function inferCoverageStatus(priorAuth: unknown): CoverageStatus {
+  if (
+    priorAuth === false ||
+    priorAuth === "false" ||
+    priorAuth === "False" ||
+    priorAuth === "no" ||
+    priorAuth === "No"
+  ) {
+    return "Preferred";
+  }
+  return "Prior Auth Required";
+}
+
+function quarterFromIsoDate(dateStr: string): string {
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return "";
+  const y = d.getFullYear();
+  const q = Math.floor(d.getMonth() / 3) + 1;
+  return `${y}-Q${q}`;
+}
+
+/**
+ * Normalizes raw `policy_changes` JSON (DB or parse-pdf) into `PolicyChange` rows.
+ */
+export function normalizePolicyChangesRaw(
+  raw: unknown,
+  opts: {
+    documentId: string;
+    defaultPayer: string;
+    defaultDrug: string;
+  },
+): PolicyChange[] {
+  if (!Array.isArray(raw)) return [];
+
+  const out: PolicyChange[] = [];
+
+  raw.forEach((item, index) => {
+    if (!item || typeof item !== "object") return;
+    const o = item as Record<string, unknown>;
+    const field = normalizeText(o.field, "").trim();
+    if (!field) return;
+
+    let changeType = String(
+      o.change_type ?? o.changeType ?? "modification",
+    ).toLowerCase();
+    if (
+      changeType !== "addition" &&
+      changeType !== "removal" &&
+      changeType !== "modification"
+    ) {
+      changeType = "modification";
+    }
+
+    const effectiveDate =
+      normalizeText(o.effective_date ?? o.effectiveDate, "").trim() || "";
+    let quarter = normalizeText(o.quarter, "").trim();
+    if (!quarter && effectiveDate) {
+      quarter = quarterFromIsoDate(effectiveDate);
+    }
+    if (!quarter) quarter = "Unknown";
+
+    const rowPayer = normalizeText(o.payer, "").trim();
+    const payer = rowPayer
+      ? normalizePayerBrand(sanitizePayerDisplay(rowPayer)) || opts.defaultPayer
+      : opts.defaultPayer;
+    const drugNameRaw =
+      normalizeText(o.drug_name ?? o.drugName, "").trim() ||
+      opts.defaultDrug;
+    const drugName = shortenMedicationName(drugNameRaw);
+
+    const oldValue =
+      normalizeText(o.old_value ?? o.oldValue, "").trim() ||
+      "Not specified";
+    const newValue =
+      normalizeText(o.new_value ?? o.newValue, "").trim() ||
+      "Not specified";
+
+    out.push({
+      id: `${opts.documentId}-pc-${index}`,
+      payer,
+      drugName,
+      field,
+      oldValue,
+      newValue,
+      changeType: changeType as PolicyChange["changeType"],
+      effectiveDate: effectiveDate || "Not specified",
+      quarter,
+    });
+  });
+
+  return out;
+}
+
+function emptyCriteriaBlock(notes: string): PlanCard["criteria"] {
   return {
-    id: crypto.randomUUID(),
-    payer: insuranceProvider,
-    drugName: medicationName || "Uploaded medication",
-    rxNormCode: patientName
-      ? `Policy analysis for ${patientName}`
-      : "Medical policy PDF analysis",
-    coverageStatus: deriveCoverageStatus(analysis),
-    effectiveDate: new Date().toISOString().slice(0, 10),
-    effectiveDateLabel: "Analyzed",
-    sourceLinkLabel: "Source file available in uploaded records",
-    hasSourceDocumentLink: false,
-    diagnosisCodes: diagnosisCodes.length
-      ? diagnosisCodes
-      : ["Diagnosis not specified"],
-    criteria: {
-      trialDuration: analysis.prior_auth_required
-        ? "Prior authorization is required; prepare supporting documentation before submission."
-        : "No prior authorization requirement was identified in the uploaded PDF.",
-      labRequirements: missingInformation.length
-        ? missingInformation
-        : ["No missing information was flagged by the parser."],
-      ageLimit: "Not specified in uploaded PDF",
-      diagnosisRequirement,
-      additionalNotes:
-        additionalNotes || "No additional notes were extracted from the PDF.",
-      sourceSnippet,
-      sourceDocLink: "#uploaded-pdf-analysis",
-    },
+    trialDuration: "Not specified in extracted data",
+    labRequirements: [],
+    ageLimit: "Not specified in extracted data",
+    diagnosisRequirement: "See diagnosis / summary fields",
+    additionalNotes: notes || "—",
+    sourceSnippet:
+      notes.slice(0, 400) ||
+      "Excerpt not available — open the original PDF from your upload history.",
+    sourceDocLink: "#uploaded-policy",
   };
 }
 
-export function transformStoredDocumentToPlan(
-  document: MedicalDocumentRow,
-): PlanCard {
-  const rawPayload =
-    document.raw_extracted_data &&
-    typeof document.raw_extracted_data === "object"
-      ? (document.raw_extracted_data as ParsePdfResponse)
-      : null;
-  const transformed = rawPayload
-    ? transformBackendResponse(rawPayload)
-    : null;
-  const uploadedDate = normalizePlanDate(
-    document.effective_date || document.uploaded_at,
-  );
+export interface TransformOptions {
+  planId?: string;
+  sourceFilename?: string;
+  documentId?: string;
+}
 
-  if (transformed) {
-    return {
-      ...transformed,
-      id: document.id,
-      effectiveDate: uploadedDate,
-      effectiveDateLabel: document.effective_date ? "Effective" : "Uploaded",
-      sourceLinkLabel: `Source file: ${document.filename}`,
-      hasSourceDocumentLink: false,
-      criteria: {
-        ...transformed.criteria,
-        sourceSnippet:
-          transformed.criteria.sourceSnippet ||
-          document.clinical_criteria ||
-          `Saved from ${document.filename}`,
-        sourceDocLink: `#${document.filename}`,
+/**
+ * Maps `/api/parse-pdf` JSON (and equivalent Supabase `raw_extracted_data`) to a PlanCard.
+ */
+export function transformBackendResponse(
+  data: unknown,
+  options?: TransformOptions,
+): PlanCard | null {
+  const payload = data as ParsePdfResponse;
+  const a = payload?.analysis;
+  if (!a || typeof a !== "object") {
+    return null;
+  }
+
+  const drugNameRaw = normalizeText(a.medication_name);
+  if (!drugNameRaw) {
+    return null;
+  }
+  const drugName = shortenMedicationName(drugNameRaw);
+
+  const payer = formatPayerForDisplay(
+    normalizeText(a.insurance_provider).trim(),
+  );
+  const conditions = normalizeText(a.diagnosis);
+  const summary = normalizeText(a.summary);
+  const genericNameRaw = normalizeText(a.generic_name);
+  const genericName = genericNameRaw
+    ? shortenMedicationName(genericNameRaw)
+    : "";
+  const id = options?.planId ?? crypto.randomUUID();
+  /** Always set so session uploads (no Supabase row) still show delete; matches DB id when persisted. */
+  const documentId = options?.documentId ?? options?.planId ?? id;
+  const diagnosisText = [conditions, summary].filter(Boolean).join(" ");
+  const codesFromText = extractIcdCodes(diagnosisText);
+
+  const coverageStatus = inferCoverageStatus(a.prior_auth_required);
+
+  const policyChanges = normalizePolicyChangesRaw(a.policy_changes, {
+    documentId: id,
+    defaultPayer: payer,
+    defaultDrug: drugName,
+  });
+
+  return {
+    id,
+    documentId,
+    payer,
+    drugName,
+    genericName: genericName || undefined,
+    conditions: conditions || undefined,
+    clinicalCriteria: summary || undefined,
+    priorAuthRequirement: coverageStatus === "Prior Auth Required" ? "Required" : "Not required",
+    rxNormCode: "Not extracted",
+    coverageStatus,
+    effectiveDate: "",
+    sourceLinkLabel: "Source from uploaded policy",
+    hasSourceDocumentLink: false,
+    sourceFilename: options?.sourceFilename,
+    diagnosisCodes: codesFromText,
+    criteria: emptyCriteriaBlock(summary),
+    policyChanges: policyChanges.length > 0 ? policyChanges : undefined,
+  };
+}
+
+/**
+ * Hydrate a PlanCard from a persisted `medical_documents` row.
+ */
+export function planFromMedicalDocumentRow(
+  row: MedicalDocumentRow,
+): PlanCard | null {
+  const raw = row.raw_extracted_data as ParsePdfResponse | null;
+  const base = transformBackendResponse(raw ?? { analysis: {} }, {
+    planId: row.id,
+    documentId: row.id,
+    sourceFilename: row.filename,
+  });
+
+  if (!base) {
+    const drugName = shortenMedicationName(
+      row.drug_name?.trim() || "Unknown medication",
+    );
+    const payer = "Uploaded policy";
+    const policyChanges = normalizePolicyChangesRaw(
+      row.policy_changes ??
+        (raw?.analysis as UploadedAnalysis | undefined)?.policy_changes,
+      {
+        documentId: row.id,
+        defaultPayer: payer,
+        defaultDrug: drugName,
       },
+    );
+    return {
+      id: row.id,
+      documentId: row.id,
+      payer,
+      drugName,
+      conditions: row.conditions ?? undefined,
+      clinicalCriteria: row.clinical_criteria ?? undefined,
+      priorAuthRequirement: row.prior_auth_required ?? undefined,
+      rxNormCode: "Not extracted",
+      coverageStatus: inferCoverageStatus(row.prior_auth_required),
+      effectiveDate: row.effective_date ?? "",
+      sourceFilename: row.filename,
+      sourceLinkLabel: "Source from uploaded policy",
+      hasSourceDocumentLink: false,
+      diagnosisCodes: extractIcdCodes(
+        [row.conditions, row.diagnosis_codes, row.clinical_criteria]
+          .filter(Boolean)
+          .join(" "),
+      ),
+      criteria: emptyCriteriaBlock(row.clinical_criteria ?? row.conditions ?? ""),
+      policyChanges: policyChanges.length > 0 ? policyChanges : undefined,
     };
   }
 
-  const diagnosisCodes = splitDiagnosisValues(
-    document.diagnosis_codes || document.conditions,
+  const policyChanges = normalizePolicyChangesRaw(
+    row.policy_changes ??
+      (raw?.analysis as UploadedAnalysis | undefined)?.policy_changes,
+    {
+      documentId: row.id,
+      defaultPayer: base.payer,
+      defaultDrug: base.drugName,
+    },
   );
-  const payer = normalizeText(
-    rawPayload?.analysis?.insurance_provider,
-    "Uploaded payer",
-  );
-  const drugName = document.drug_name || "Uploaded medication";
-  const diagnosisRequirement = document.conditions || "Not specified";
-  const summary = document.clinical_criteria || "No additional notes available.";
 
   return {
-    id: document.id,
-    payer,
-    drugName,
-    rxNormCode: `Saved upload: ${document.filename}`,
-    coverageStatus: deriveCoverageStatus(
-      rawPayload?.analysis ?? {},
-      document.prior_auth_required,
-    ),
-    effectiveDate: uploadedDate,
-    effectiveDateLabel: document.effective_date ? "Effective" : "Uploaded",
-    sourceLinkLabel: `Source file: ${document.filename}`,
-    hasSourceDocumentLink: false,
-    diagnosisCodes: diagnosisCodes.length
-      ? diagnosisCodes
-      : ["Diagnosis not specified"],
-    criteria: {
-      trialDuration:
-        document.prior_auth_required?.toLowerCase() === "true"
-          ? "Prior authorization required based on uploaded document."
-          : "No explicit prior authorization requirement was stored.",
-      labRequirements: ["Review uploaded summary for full eligibility details."],
-      ageLimit: "Not specified in uploaded PDF",
-      diagnosisRequirement,
-      additionalNotes: summary,
-      sourceSnippet: truncateText(summary),
-      sourceDocLink: `#${document.filename}`,
-    },
+    ...base,
+    id: row.id,
+    documentId: row.id,
+    sourceFilename: row.filename,
+    conditions: row.conditions ?? base.conditions,
+    clinicalCriteria: row.clinical_criteria ?? base.clinicalCriteria,
+    priorAuthRequirement: row.prior_auth_required ?? base.priorAuthRequirement,
+    effectiveDate: row.effective_date ?? base.effectiveDate,
+    diagnosisCodes:
+      base.diagnosisCodes.length > 0
+        ? base.diagnosisCodes
+        : extractIcdCodes(
+            [row.diagnosis_codes, row.conditions].filter(Boolean).join(" "),
+          ),
+    policyChanges:
+      policyChanges.length > 0
+        ? policyChanges
+        : base.policyChanges,
   };
 }

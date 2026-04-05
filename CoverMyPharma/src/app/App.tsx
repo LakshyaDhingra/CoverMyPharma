@@ -1,11 +1,19 @@
-import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
+import { useAuth0 } from "@auth0/auth0-react";
 import {
   Search,
   GitCompareArrows,
   LayoutGrid,
   CheckCircle,
   AlertTriangle,
-  Pill,
   ClipboardList,
   History,
 } from "lucide-react";
@@ -13,6 +21,7 @@ import {
   MOCK_PLANS,
   DIAGNOSIS_OPTIONS,
   type PlanCard,
+  type PolicyChange,
 } from "./components/mock-data";
 import { PlanSnapshotCard } from "./components/plan-card";
 import { DetailPanel } from "./components/detail-panel";
@@ -21,10 +30,13 @@ import { CriteriaLookup } from "./components/criteria-lookup";
 import { PolicyChanges } from "./components/policy-changes";
 import { VOICE_OPTIONS } from "./components/tts";
 import UploadPage from "./components/upload-page";
-import { transformBackendResponse } from "./lib/plan-transform";
+import symbol from "@/assets/CoverMyPharmaSymbol.svg";
+import { transformBackendResponse } from "@/app/lib/plan-transform";
 import { useSavedPlans } from "@/hooks/useSavedPlans";
+import { hasSupabaseConfig, supabase } from "@/lib/supabase";
 
 type ActiveTab = "search" | "criteria" | "changes";
+const MAX_COMPARE_PLANS = 4;
 
 const TABS: { id: ActiveTab; label: string; icon: ReactNode }[] = [
   {
@@ -48,42 +60,205 @@ const diagnosisLabels = new Map(
   DIAGNOSIS_OPTIONS.map((option) => [option.value, option.label]),
 );
 
+const SESSION_OWNER_KEY = "cmp_session_owner";
+const SESSION_UPLOADED_PLANS_KEY = "cmp_uploaded_plans";
+const SESSION_SHOW_UPLOAD_KEY = "cmp_show_upload";
+
+function isPlanCardLike(value: unknown): value is PlanCard {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const plan = value as Partial<PlanCard>;
+  return (
+    typeof plan.id === "string" &&
+    typeof plan.payer === "string" &&
+    typeof plan.drugName === "string" &&
+    typeof plan.rxNormCode === "string" &&
+    typeof plan.coverageStatus === "string" &&
+    typeof plan.effectiveDate === "string" &&
+    Array.isArray(plan.diagnosisCodes) &&
+    !!plan.criteria &&
+    typeof plan.criteria === "object"
+  );
+}
+
+function hasMatchingSessionOwner(ownerId: string) {
+  try {
+    return sessionStorage.getItem(SESSION_OWNER_KEY) === ownerId;
+  } catch {
+    return false;
+  }
+}
+
+function loadSessionUploadedPlans(ownerId: string): PlanCard[] {
+  try {
+    if (!hasMatchingSessionOwner(ownerId)) {
+      return [];
+    }
+
+    const raw = sessionStorage.getItem(SESSION_UPLOADED_PLANS_KEY);
+    if (!raw) {
+      return [];
+    }
+
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.filter((plan): plan is PlanCard => isPlanCardLike(plan));
+  } catch {
+    return [];
+  }
+}
+
+function loadStoredShowUpload(ownerId: string) {
+  try {
+    if (!hasMatchingSessionOwner(ownerId)) {
+      return true;
+    }
+
+    return sessionStorage.getItem(SESSION_SHOW_UPLOAD_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function persistSessionOwner(ownerId: string) {
+  try {
+    sessionStorage.setItem(SESSION_OWNER_KEY, ownerId);
+  } catch {
+    /* sessionStorage unavailable */
+  }
+}
+
+function persistSessionUploadedPlans(plans: PlanCard[], ownerId: string) {
+  try {
+    persistSessionOwner(ownerId);
+    sessionStorage.setItem(SESSION_UPLOADED_PLANS_KEY, JSON.stringify(plans));
+  } catch {
+    /* sessionStorage unavailable */
+  }
+}
+
+function persistShowUploadState(showUpload: boolean, ownerId: string) {
+  try {
+    persistSessionOwner(ownerId);
+    sessionStorage.setItem(SESSION_SHOW_UPLOAD_KEY, showUpload ? "1" : "0");
+  } catch {
+    /* sessionStorage unavailable */
+  }
+}
+
+function clearStoredSessionState() {
+  try {
+    sessionStorage.removeItem(SESSION_OWNER_KEY);
+    sessionStorage.removeItem(SESSION_UPLOADED_PLANS_KEY);
+    sessionStorage.removeItem(SESSION_SHOW_UPLOAD_KEY);
+  } catch {
+    /* sessionStorage unavailable */
+  }
+}
+
+function getPlanIdentity(plan: PlanCard) {
+  return plan.documentId ?? plan.id;
+}
+
+function mergeRealPlans(uploadedPlans: PlanCard[], savedPlans: PlanCard[]) {
+  const merged = new Map<string, PlanCard>();
+
+  uploadedPlans.forEach((plan) => {
+    merged.set(getPlanIdentity(plan), plan);
+  });
+
+  savedPlans.forEach((plan) => {
+    merged.set(getPlanIdentity(plan), plan);
+  });
+
+  return [...merged.values()];
+}
+
 export default function App() {
+  const {
+    isAuthenticated,
+    isLoading: authLoading,
+    loginWithRedirect,
+    logout,
+    user,
+  } = useAuth0();
   const [activeTab, setActiveTab] = useState<ActiveTab>("search");
   const [uploadedPlans, setUploadedPlans] = useState<PlanCard[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedDiagnosis, setSelectedDiagnosis] = useState("");
+  const [diagnosisSearchQuery, setDiagnosisSearchQuery] = useState("");
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [compareIds, setCompareIds] = useState<Set<string>>(new Set());
   const [selectedVoiceId, setSelectedVoiceId] = useState(VOICE_OPTIONS[0].id);
+  const [selectedPlaybackRate, setSelectedPlaybackRate] = useState(1);
   const [showUpload, setShowUpload] = useState(true);
+  const [isSessionHydrated, setIsSessionHydrated] = useState(false);
   const {
     plans: savedPlans,
     isLoading: isSavedPlansLoading,
     error: savedPlansError,
+    reload: reloadSavedPlans,
   } = useSavedPlans();
+  const sessionOwnerId = user?.sub ?? null;
 
-  const activePlans = useMemo(
-    () =>
-      uploadedPlans.length > 0 || savedPlans.length > 0
-        ? [...uploadedPlans, ...savedPlans]
-        : MOCK_PLANS,
+  useEffect(() => {
+    if (authLoading) {
+      return;
+    }
+
+    if (!isAuthenticated || !sessionOwnerId) {
+      setUploadedPlans([]);
+      setShowUpload(true);
+      clearStoredSessionState();
+      setIsSessionHydrated(true);
+      return;
+    }
+
+    setUploadedPlans(loadSessionUploadedPlans(sessionOwnerId));
+    setShowUpload(loadStoredShowUpload(sessionOwnerId));
+    setIsSessionHydrated(true);
+  }, [authLoading, isAuthenticated, sessionOwnerId]);
+
+  useEffect(() => {
+    if (!isSessionHydrated || !isAuthenticated || !sessionOwnerId) {
+      return;
+    }
+
+    persistSessionUploadedPlans(uploadedPlans, sessionOwnerId);
+  }, [isAuthenticated, isSessionHydrated, sessionOwnerId, uploadedPlans]);
+
+  useEffect(() => {
+    if (!isSessionHydrated || !isAuthenticated || !sessionOwnerId) {
+      return;
+    }
+
+    persistShowUploadState(showUpload, sessionOwnerId);
+  }, [isAuthenticated, isSessionHydrated, sessionOwnerId, showUpload]);
+
+  const realPlans = useMemo(
+    () => mergeRealPlans(uploadedPlans, savedPlans),
     [uploadedPlans, savedPlans],
   );
-  const hasRealPlans = uploadedPlans.length > 0 || savedPlans.length > 0;
+
+  const activePlans = useMemo(
+    () => (realPlans.length > 0 ? realPlans : MOCK_PLANS),
+    [realPlans],
+  );
+  const hasRealPlans = realPlans.length > 0;
+
+  const aggregatedPolicyChanges = useMemo((): PolicyChange[] => {
+    if (!hasRealPlans) return [];
+    return realPlans.flatMap((plan) => plan.policyChanges ?? []);
+  }, [hasRealPlans, realPlans]);
 
   const availablePayers = useMemo(
     () => [...new Set(activePlans.map((plan) => plan.payer))],
     [activePlans],
   );
-
-  const diagnosisOptions = useMemo(() => {
-    const values = [...new Set(activePlans.flatMap((plan) => plan.diagnosisCodes))];
-    return values.map((value) => ({
-      value,
-      label: diagnosisLabels.get(value) ?? value,
-    }));
-  }, [activePlans]);
 
   const [selectedPayers, setSelectedPayers] = useState<Set<string> | null>(null);
   const activeSelectedPayers = useMemo(() => {
@@ -102,45 +277,110 @@ export default function App() {
 
     return next;
   }, [availablePayers, selectedPayers]);
-  const activeSelectedDiagnosis = diagnosisOptions.some(
-    (diagnosis) => diagnosis.value === selectedDiagnosis,
-  )
-    ? selectedDiagnosis
-    : "";
 
-  const handleUploadSuccess = (data: unknown) => {
-    const transformedPlan = transformBackendResponse(data);
+  const activeSelectedPayersRef = useRef(activeSelectedPayers);
+  useEffect(() => {
+    activeSelectedPayersRef.current = activeSelectedPayers;
+  }, [activeSelectedPayers]);
 
-    if (!transformedPlan) {
-      return;
-    }
+  const availablePayersSet = useMemo(
+    () => new Set(availablePayers),
+    [availablePayers],
+  );
 
-    setUploadedPlans((prev) => [...prev, transformedPlan]);
-  };
+  /** When the set of payers in the data changes, default back to “all payers selected”. */
+  const availablePayersKey = useMemo(
+    () => [...availablePayers].sort().join("\0"),
+    [availablePayers],
+  );
+  useEffect(() => {
+    setSelectedPayers(null);
+  }, [availablePayersKey]);
+
+  const handleUploadSuccess = useCallback(
+    (
+      data: unknown,
+      meta?: { documentId?: string; filename?: string },
+    ) => {
+      const transformedPlan = transformBackendResponse(data, {
+        planId: meta?.documentId,
+        sourceFilename: meta?.filename,
+        documentId: meta?.documentId,
+      });
+
+      if (!transformedPlan) {
+        return;
+      }
+
+      setUploadedPlans((prev) => [...prev, transformedPlan]);
+    },
+    [],
+  );
+
+  const handleDeleteDocument = useCallback(
+    async (documentId: string): Promise<boolean> => {
+      if (hasSupabaseConfig && supabase && isAuthenticated) {
+        const { error } = await supabase
+          .from("medical_documents")
+          .delete()
+          .eq("id", documentId);
+
+        if (error) {
+          console.error("Failed to delete document:", error);
+          return false;
+        }
+      }
+
+      setSelectedCardId((id) => (id === documentId ? null : id));
+      setCompareIds((prev) => {
+        const next = new Set(prev);
+        next.delete(documentId);
+        return next;
+      });
+      setUploadedPlans((prev) => prev.filter((p) => p.id !== documentId));
+      void reloadSavedPlans();
+      return true;
+    },
+    [isAuthenticated, reloadSavedPlans],
+  );
 
   const filteredPlans = useMemo(() => {
+    const drugQ = searchQuery.trim().toLowerCase();
+    const diagQ = diagnosisSearchQuery.trim().toLowerCase();
+
     return activePlans.filter((plan) => {
-      if (
-        searchQuery &&
-        !plan.drugName.toLowerCase().includes(searchQuery.toLowerCase())
-      ) {
-        return false;
+      if (drugQ) {
+        const inBrand = plan.drugName.toLowerCase().includes(drugQ);
+        const inGeneric =
+          plan.genericName?.toLowerCase().includes(drugQ) ?? false;
+        if (!inBrand && !inGeneric) return false;
       }
 
       if (!activeSelectedPayers.has(plan.payer)) {
         return false;
       }
 
-      if (
-        activeSelectedDiagnosis &&
-        !plan.diagnosisCodes.includes(activeSelectedDiagnosis)
-      ) {
-        return false;
+      if (diagQ) {
+        const codeHit = plan.diagnosisCodes.some((code) =>
+          code.toLowerCase().includes(diagQ),
+        );
+        const condHit =
+          plan.conditions?.toLowerCase().includes(diagQ) ?? false;
+        const labelHit = plan.diagnosisCodes.some((code) => {
+          const label = diagnosisLabels.get(code);
+          return label?.toLowerCase().includes(diagQ) ?? false;
+        });
+        if (!codeHit && !condHit && !labelHit) return false;
       }
 
       return true;
     });
-  }, [activePlans, searchQuery, activeSelectedPayers, activeSelectedDiagnosis]);
+  }, [
+    activePlans,
+    searchQuery,
+    diagnosisSearchQuery,
+    activeSelectedPayers,
+  ]);
 
   const selectedPlan = selectedCardId
     ? activePlans.find((plan) => plan.id === selectedCardId) ?? null
@@ -149,10 +389,14 @@ export default function App() {
   const isCompareMode = comparePlans.length >= 2;
 
   const togglePayer = (payer: string) => {
-    setSelectedPayers((prev) => {
-      const next = prev === null ? new Set(activeSelectedPayers) : new Set(prev);
+    setSelectedPayers(() => {
+      const next = new Set(activeSelectedPayersRef.current);
       if (next.has(payer)) next.delete(payer);
       else next.add(payer);
+      if (next.size === availablePayersSet.size) {
+        const allIncluded = [...availablePayersSet].every((p) => next.has(p));
+        if (allIncluded) return null;
+      }
       return next;
     });
   };
@@ -161,7 +405,7 @@ export default function App() {
     setCompareIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
-      else next.add(id);
+      else if (next.size < MAX_COMPARE_PLANS) next.add(id);
       return next;
     });
   };
@@ -201,26 +445,24 @@ export default function App() {
       </a>
 
       <header
-        className="border-b border-border bg-card sticky top-0 z-20"
+        className="grid grid-cols-[1fr_auto_1fr] items-center gap-4 px-8 py-4 bg-transparent border-b border-white/20 shadow-lg transition-all duration-300"
         role="banner"
+        style={{
+          background: "#5b8db8",
+        }}
       >
-        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center gap-3">
-          <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-primary">
-            <Pill
-              className="w-5 h-5 text-primary-foreground"
-              aria-hidden="true"
-            />
-          </div>
-          <div>
-            <h1 className="leading-tight">CoverMyPharma</h1>
-            <p className="text-sm text-muted-foreground mb-0">
-              Medical Benefit Drug Policy Tracker
-            </p>
-          </div>
+        <div className="flex items-center gap-3 justify-self-start">
+          <img
+            src={symbol}
+            alt="CoverMyPharma"
+            className="h-20 w-auto cursor-pointer hover:scale-105 transition-transform duration-200"
+            style={{ filter: "brightness(0) invert(1)" }}
+            onClick={() => setShowUpload(true)}
+          />
         </div>
 
-        <nav aria-label="Main navigation" className="max-w-7xl mx-auto px-4">
-          <div className="flex gap-0 border-b-0" role="tablist">
+        <nav aria-label="Main navigation" className="flex justify-center">
+          <div className="flex flex-wrap items-center gap-3" role="tablist">
             {TABS.map((tab) => (
               <button
                 key={tab.id}
@@ -229,10 +471,10 @@ export default function App() {
                 aria-selected={activeTab === tab.id}
                 aria-controls={`panel-${tab.id}`}
                 onClick={() => setActiveTab(tab.id)}
-                className={`inline-flex items-center gap-2 px-4 py-3 min-h-[44px] text-sm border-b-2 transition-colors ${
+                className={`inline-flex items-center gap-2 px-4 py-2.5 min-h-[44px] text-sm rounded-lg border transition-colors ${
                   activeTab === tab.id
-                    ? "border-primary text-primary"
-                    : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
+                    ? "bg-[#3d3d3d] border-[#3d3d3d] text-white"
+                    : "border-white/25 text-white hover:bg-white/20"
                 }`}
               >
                 {tab.icon}
@@ -241,6 +483,40 @@ export default function App() {
             ))}
           </div>
         </nav>
+
+        <div className="flex items-center gap-3 justify-self-end">
+          {isAuthenticated ? (
+            <>
+              <span className="text-sm text-white">Hello, {user?.name}</span>
+              <button
+                onClick={() =>
+                  logout({ logoutParams: { returnTo: window.location.origin } })
+                }
+                className="text-sm px-4 py-2 rounded-lg hover:bg-white/20 transition-all duration-200 hover:shadow-md text-white"
+              >
+                Log out
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={() => loginWithRedirect()}
+                className="text-sm px-4 py-2 rounded-lg hover:bg-white/20 transition-all duration-200 hover:shadow-md text-white"
+              >
+                Sign in
+              </button>
+              <button
+                onClick={() => loginWithRedirect()}
+                className="text-sm font-medium px-4 py-2 rounded-lg text-white hover:opacity-90 transition-all duration-200 hover:shadow-md"
+                style={{
+                  background: "#3d3d3d",
+                }}
+              >
+                Get started
+              </button>
+            </>
+          )}
+        </div>
       </header>
 
       <main id="main-content" className="flex-1">
@@ -310,23 +586,28 @@ export default function App() {
                 ))}
               </fieldset>
 
-              <div className="flex flex-col">
-                <label htmlFor="diagnosis-select" className="text-sm mb-1.5">
-                  Diagnosis Code
+              <div className="flex flex-col flex-1 min-w-0 max-w-md">
+                <label htmlFor="diagnosis-search" className="text-sm mb-1.5">
+                  Diagnosis code or keyword
                 </label>
-                <select
-                  id="diagnosis-select"
-                  value={activeSelectedDiagnosis}
-                  onChange={(e) => setSelectedDiagnosis(e.target.value)}
-                  className="px-3 py-2.5 min-h-[44px] rounded-lg border border-border bg-input-background text-sm max-w-xs"
-                >
-                  <option value="">All Diagnoses</option>
-                  {diagnosisOptions.map((diagnosis) => (
-                    <option key={diagnosis.value} value={diagnosis.value}>
-                      {diagnosis.label}
-                    </option>
-                  ))}
-                </select>
+                <div className="relative">
+                  <Search
+                    className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground"
+                    aria-hidden="true"
+                  />
+                  <input
+                    id="diagnosis-search"
+                    type="search"
+                    placeholder="e.g. C34, lung, Crohn's..."
+                    value={diagnosisSearchQuery}
+                    onChange={(e) => setDiagnosisSearchQuery(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2.5 min-h-[44px] rounded-lg border border-border bg-input-background text-sm"
+                    aria-describedby="diagnosis-search-hint"
+                  />
+                </div>
+                <span id="diagnosis-search-hint" className="sr-only">
+                  Filter by ICD-style code, condition text, or diagnosis label
+                </span>
               </div>
 
               <div className="flex items-end">
@@ -360,6 +641,11 @@ export default function App() {
                 <span className="ml-auto flex items-center gap-2 text-primary">
                   <GitCompareArrows className="w-4 h-4" aria-hidden="true" />
                   {compareIds.size} selected for comparison
+                  {compareIds.size === MAX_COMPARE_PLANS && (
+                    <span className="text-sm text-muted-foreground">
+                      Max {MAX_COMPARE_PLANS}
+                    </span>
+                  )}
                   {compareIds.size >= 2 && (
                     <span className="text-sm bg-primary text-primary-foreground px-2 py-0.5 rounded-full">
                       Diff Active
@@ -383,7 +669,7 @@ export default function App() {
                   ? "Uploaded Policy Analyses"
                   : "All Indexed Plans"}
             </h3>
-            {isSavedPlansLoading && !uploadedPlans.length && (
+            {isSavedPlansLoading && !realPlans.length && (
               <p className="text-sm text-muted-foreground mb-4" role="status">
                 Loading saved policy records from Supabase...
               </p>
@@ -415,6 +701,10 @@ export default function App() {
                       plan={plan}
                       isSelected={selectedCardId === plan.id}
                       isCompareChecked={compareIds.has(plan.id)}
+                      isCompareDisabled={
+                        compareIds.size >= MAX_COMPARE_PLANS &&
+                        !compareIds.has(plan.id)
+                      }
                       onSelect={(id) =>
                         setSelectedCardId(selectedCardId === id ? null : id)
                       }
@@ -432,6 +722,17 @@ export default function App() {
               onClose={() => setCompareIds(new Set())}
               voiceId={selectedVoiceId}
               onVoiceChange={setSelectedVoiceId}
+              playbackRate={selectedPlaybackRate}
+              onPlaybackRateChange={setSelectedPlaybackRate}
+              onDeleteDocument={handleDeleteDocument}
+              onPlanDeleted={(planId) => {
+                setCompareIds((prev) => {
+                  const next = new Set(prev);
+                  next.delete(planId);
+                  return next;
+                });
+                setSelectedCardId((id) => (id === planId ? null : id));
+              }}
             />
           ) : selectedPlan ? (
             <DetailPanel
@@ -439,6 +740,9 @@ export default function App() {
               onClose={() => setSelectedCardId(null)}
               voiceId={selectedVoiceId}
               onVoiceChange={setSelectedVoiceId}
+              playbackRate={selectedPlaybackRate}
+              onPlaybackRateChange={setSelectedPlaybackRate}
+              onDeleteDocument={handleDeleteDocument}
             />
           ) : null}
         </div>
@@ -452,8 +756,13 @@ export default function App() {
           <div className="max-w-5xl mx-auto px-4 py-6">
             <CriteriaLookup
               plans={activePlans}
-              hasRealPlans={hasRealPlans}
+              plansDataSource={hasRealPlans ? "uploaded" : "mock"}
               isLoading={isSavedPlansLoading}
+              voiceId={selectedVoiceId}
+              onVoiceChange={setSelectedVoiceId}
+              playbackRate={selectedPlaybackRate}
+              onPlaybackRateChange={setSelectedPlaybackRate}
+              onDeleteDocument={handleDeleteDocument}
             />
           </div>
         </div>
@@ -465,7 +774,10 @@ export default function App() {
           className={activeTab === "changes" ? "" : "hidden"}
         >
           <div className="max-w-6xl mx-auto px-4 py-6">
-            <PolicyChanges />
+            <PolicyChanges
+              dbChanges={aggregatedPolicyChanges}
+              hasRealPlans={hasRealPlans}
+            />
           </div>
         </div>
       </main>

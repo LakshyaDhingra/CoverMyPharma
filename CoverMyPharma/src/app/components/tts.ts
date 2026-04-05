@@ -1,4 +1,9 @@
 import type { PlanCard } from "./types";
+import {
+  getPlanClinicalCriteria,
+  getPlanConditions,
+  getPlanPriorAuthRequirement,
+} from "./mock-data";
 
 export interface VoiceOption {
   id: string;
@@ -11,8 +16,24 @@ export const VOICE_OPTIONS: VoiceOption[] = [
   { id: "pNInz6obpgDQGcFmaJgB", label: "Adam" },
 ];
 
+export const PLAYBACK_SPEED_OPTIONS: { value: number; label: string }[] = [
+  { value: 0.75, label: "0.75x" },
+  { value: 1, label: "1x" },
+  { value: 1.25, label: "1.25x" },
+  { value: 1.5, label: "1.5x" },
+];
+
 export function formatEffectiveDate(date: string) {
-  return new Date(date).toLocaleDateString("en-US", {
+  if (!date) {
+    return "Not available";
+  }
+
+  const normalizedDate = new Date(date);
+  if (Number.isNaN(normalizedDate.getTime())) {
+    return "Not available";
+  }
+
+  return normalizedDate.toLocaleDateString("en-US", {
     year: "numeric",
     month: "long",
     day: "numeric",
@@ -64,8 +85,14 @@ export async function generateSpeechAudio(text: string, voiceId?: string) {
 }
 
 export function buildPlanSpeechSummary(plan: PlanCard) {
+  const conditions = getPlanConditions(plan);
+  const priorAuthRequirement = getPlanPriorAuthRequirement(plan);
+
   return [
     `${plan.drugName} for ${plan.payer}.`,
+    plan.genericName ? `Generic name: ${plan.genericName}.` : "",
+    `Conditions or diagnosis: ${conditions}.`,
+    `Prior authorization requirement: ${priorAuthRequirement}.`,
     `Coverage status is ${plan.coverageStatus}.`,
     `Effective ${formatEffectiveDate(plan.effectiveDate)}.`,
     `Diagnosis codes include ${formatDiagnosisCodesForSpeech(plan.diagnosisCodes)}.`,
@@ -80,16 +107,21 @@ export function buildPlanSpeechSummary(plan: PlanCard) {
 export function buildComparisonSpeechSummary(plans: PlanCard[]) {
   return plans
     .map((plan) => {
+      const conditions = getPlanConditions(plan);
+      const priorAuthRequirement = getPlanPriorAuthRequirement(plan);
+      const drugAndGeneric = plan.genericName
+        ? `${plan.drugName} / ${plan.genericName}`
+        : `${plan.drugName} / Not available`;
+      const clinicalCriteria = getPlanClinicalCriteria(plan);
+
       return [
-        `${plan.payer} lists ${plan.drugName} as ${plan.coverageStatus}.`,
-        `${plan.rxNormCode}.`,
-        `Effective ${formatEffectiveDate(plan.effectiveDate)}.`,
-        `Diagnosis codes include ${formatDiagnosisCodesForSpeech(plan.diagnosisCodes)}.`,
-        `Trial duration: ${plan.criteria.trialDuration}.`,
-        `Lab requirements: ${plan.criteria.labRequirements.join("; ")}.`,
-        `Age limit: ${plan.criteria.ageLimit}.`,
-        `Diagnosis requirement: ${plan.criteria.diagnosisRequirement}.`,
-        `Additional notes: ${plan.criteria.additionalNotes}.`,
+        `${plan.payer}, ${plan.drugName}.`,
+        `Drug name and generic name: ${drugAndGeneric}.`,
+        `Conditions or diagnosis: ${conditions}.`,
+        `Prior auth requirement for drug: ${priorAuthRequirement}.`,
+        `Clinical criteria: ${clinicalCriteria}.`,
+        `Effective date of coverage: ${formatEffectiveDate(plan.effectiveDate)}.`,
+        `Diagnosis codes: ${formatDiagnosisCodesForSpeech(plan.diagnosisCodes)}.`,
       ].join(" ");
     })
     .join(" ");

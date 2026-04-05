@@ -1,15 +1,20 @@
-import { AlertTriangle, X } from "lucide-react";
+import { useState } from "react";
+import { AlertTriangle, ExternalLink, FileText, Trash2, X } from "lucide-react";
 
 import {
   PlanCard,
   PAYER_COLORS,
   DEFAULT_PAYER_STYLE,
-  STATUS_STYLES,
+  formatPlanDrugHeading,
+  getPlanClinicalCriteria,
+  getPlanConditions,
+  getPlanPriorAuthRequirement,
 } from "./mock-data";
 import { TtsIconButton } from "./tts-icon-button";
 import {
   buildComparisonSpeechSummary,
   formatEffectiveDate,
+  PLAYBACK_SPEED_OPTIONS,
   VOICE_OPTIONS,
 } from "./tts";
 
@@ -18,6 +23,10 @@ interface ComparisonPanelProps {
   onClose: () => void;
   voiceId?: string;
   onVoiceChange: (voiceId: string) => void;
+  playbackRate?: number;
+  onPlaybackRateChange: (playbackRate: number) => void;
+  onDeleteDocument?: (documentId: string) => boolean | Promise<boolean>;
+  onPlanDeleted?: (planId: string) => void;
 }
 
 const CRITERIA_ROWS: {
@@ -25,15 +34,36 @@ const CRITERIA_ROWS: {
   label: string;
   accessor: (plan: PlanCard) => string;
 }[] = [
-  { key: "rxnorm", label: "RxNorm Code", accessor: (plan) => plan.rxNormCode },
-  { key: "status", label: "Coverage Status", accessor: (plan) => plan.coverageStatus },
-  { key: "effective", label: "Effective Date", accessor: (plan) => formatEffectiveDate(plan.effectiveDate) },
-  { key: "diagnosisCodes", label: "Diagnosis Codes", accessor: (plan) => plan.diagnosisCodes.join(", ") },
-  { key: "trial", label: "Trial Duration", accessor: (plan) => plan.criteria.trialDuration },
-  { key: "labs", label: "Lab Requirements", accessor: (plan) => plan.criteria.labRequirements.join("; ") },
-  { key: "age", label: "Age Limit", accessor: (plan) => plan.criteria.ageLimit },
-  { key: "diagnosis", label: "Diagnosis Requirement", accessor: (plan) => plan.criteria.diagnosisRequirement },
-  { key: "notes", label: "Additional Notes", accessor: (plan) => plan.criteria.additionalNotes },
+  {
+    key: "drugGeneric",
+    label: "Drug Name / Generic Name",
+    accessor: (plan) => formatPlanDrugHeading(plan),
+  },
+  {
+    key: "conditions",
+    label: "Conditions / Diagnosis",
+    accessor: (plan) => getPlanConditions(plan),
+  },
+  {
+    key: "priorAuth",
+    label: "Prior Auth Req For Drug",
+    accessor: (plan) => getPlanPriorAuthRequirement(plan),
+  },
+  {
+    key: "clinicalCriteria",
+    label: "Clinical Criteria",
+    accessor: (plan) => getPlanClinicalCriteria(plan),
+  },
+  {
+    key: "effective",
+    label: "Effective Date Of Coverage",
+    accessor: (plan) => formatEffectiveDate(plan.effectiveDate),
+  },
+  {
+    key: "diagnosisCodes",
+    label: "Diagnosis Codes",
+    accessor: (plan) => plan.diagnosisCodes.join(", "),
+  },
 ];
 
 function highlightDiffs(values: string[]): boolean[] {
@@ -47,8 +77,22 @@ export function ComparisonPanel({
   onClose,
   voiceId,
   onVoiceChange,
+  playbackRate = 1,
+  onPlaybackRateChange,
+  onDeleteDocument,
+  onPlanDeleted,
 }: ComparisonPanelProps) {
+  const [sourceOpen, setSourceOpen] = useState<Record<string, boolean>>({});
+  const [deleteTarget, setDeleteTarget] = useState<PlanCard | null>(null);
+
   const comparisonSummary = buildComparisonSpeechSummary(plans);
+  const comparisonGridStyle = {
+    gridTemplateColumns: `180px repeat(${plans.length}, minmax(0, 1fr))`,
+  };
+
+  const toggleSource = (planId: string) => {
+    setSourceOpen((prev) => ({ ...prev, [planId]: !prev[planId] }));
+  };
 
   return (
     <section
@@ -57,6 +101,56 @@ export function ComparisonPanel({
       role="region"
     >
       <div className="p-6 max-w-full mx-auto">
+        {deleteTarget?.documentId && onDeleteDocument ? (
+          <div
+            className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50"
+            role="presentation"
+            onClick={() => setDeleteTarget(null)}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="delete-compare-doc-title"
+              className="bg-card border border-border rounded-xl shadow-lg max-w-md w-full p-6"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 id="delete-compare-doc-title" className="mt-0 mb-2">
+                Delete this document?
+              </h3>
+              <p className="text-sm text-muted-foreground mb-4">
+                This removes{" "}
+                <strong>{formatPlanDrugHeading(deleteTarget)}</strong> (
+                {deleteTarget.payer}) from your account and database. This
+                cannot be undone.
+              </p>
+              <div className="flex flex-wrap gap-3 justify-end">
+                <button
+                  type="button"
+                  className="px-4 py-2.5 min-h-[44px] rounded-lg border border-border text-sm hover:bg-muted"
+                  onClick={() => setDeleteTarget(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="px-4 py-2.5 min-h-[44px] rounded-lg bg-destructive text-destructive-foreground text-sm hover:opacity-90"
+                  onClick={async () => {
+                    const docId = deleteTarget.documentId;
+                    if (!docId || !onDeleteDocument) return;
+                    const ok = await onDeleteDocument(docId);
+                    if (ok) {
+                      onPlanDeleted?.(deleteTarget.id);
+                      setDeleteTarget(null);
+                    }
+                  }}
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         <div className="flex items-center justify-between mb-5 gap-3">
           <h2 className="mt-0">Split-Screen Diff - {plans.length} Plans</h2>
           <div className="flex items-center gap-2 flex-wrap justify-end">
@@ -78,10 +172,29 @@ export function ComparisonPanel({
                 </option>
               ))}
             </select>
+            <label
+              htmlFor="comparison-speed-select"
+              className="text-sm text-muted-foreground"
+            >
+              Speed
+            </label>
+            <select
+              id="comparison-speed-select"
+              value={String(playbackRate)}
+              onChange={(e) => onPlaybackRateChange(Number(e.target.value))}
+              className="px-3 py-2 min-h-[44px] rounded-lg border border-border bg-input-background text-sm min-w-[96px]"
+            >
+              {PLAYBACK_SPEED_OPTIONS.map((speed) => (
+                <option key={speed.label} value={speed.value}>
+                  {speed.label}
+                </option>
+              ))}
+            </select>
             <TtsIconButton
               text={comparisonSummary}
               label={`comparison summary for ${plans.length} plans`}
               voiceId={voiceId}
+              playbackRate={playbackRate}
               className="min-w-[44px] min-h-[44px]"
             />
             <button
@@ -92,6 +205,117 @@ export function ComparisonPanel({
               <X className="w-5 h-5" />
             </button>
           </div>
+        </div>
+
+        <div className="grid gap-4 w-full mb-6" style={comparisonGridStyle}>
+          <div aria-hidden="true" />
+          {plans.map((plan) => {
+            const payerStyle = PAYER_COLORS[plan.payer] ?? DEFAULT_PAYER_STYLE;
+            const c = plan.criteria;
+            const sourceLinkLabel = plan.sourceLinkLabel ?? "Open source document";
+            const hasSourceDocumentLink = plan.hasSourceDocumentLink ?? true;
+            const showSrc = Boolean(sourceOpen[plan.id]);
+
+            return (
+              <div
+                key={`${plan.id}-summary-wrap`}
+                className="px-3 flex justify-center"
+              >
+                <article
+                  className="w-full rounded-xl border border-border bg-muted/20 p-4"
+                  aria-label={`${formatPlanDrugHeading(plan)} summary`}
+                >
+                  <div className="flex items-center gap-2 flex-wrap mb-3">
+                    <span
+                      className={`inline-block px-2 py-0.5 rounded-full text-sm ${payerStyle.bg} ${payerStyle.text}`}
+                    >
+                      {plan.payer}
+                    </span>
+                  </div>
+                  <h3 className="mt-0 mb-2">{formatPlanDrugHeading(plan)}</h3>
+                  <div className="space-y-1.5 text-sm text-muted-foreground">
+                    <p className="mb-0">
+                      <span className="font-medium text-foreground">
+                        Conditions / Diagnosis:
+                      </span>{" "}
+                      {getPlanConditions(plan)}
+                    </p>
+                    <p className="mb-0">
+                      <span className="font-medium text-foreground">
+                        Prior Auth Req For Drug:
+                      </span>{" "}
+                      {getPlanPriorAuthRequirement(plan)}
+                    </p>
+                    <p className="mb-0">
+                      <span className="font-medium text-foreground">
+                        Diagnosis Codes:
+                      </span>{" "}
+                      {plan.diagnosisCodes.join(", ")}
+                    </p>
+                    <p className="mb-0">
+                      <span className="font-medium text-foreground">
+                        Effective Date Of Coverage:
+                      </span>{" "}
+                      {formatEffectiveDate(plan.effectiveDate)}
+                    </p>
+                  </div>
+
+                  <div className="mt-3 pt-3 border-t border-border flex flex-wrap items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => toggleSource(plan.id)}
+                      className="inline-flex items-center gap-2 px-3 py-2 min-h-[44px] rounded-lg bg-muted hover:bg-accent transition-colors text-sm border border-border"
+                      aria-expanded={showSrc}
+                      aria-controls={`compare-source-${plan.id}`}
+                    >
+                      <FileText className="w-4 h-4" aria-hidden="true" />
+                      {showSrc ? "Hide Source" : "View Source"}
+                    </button>
+                    {plan.documentId && onDeleteDocument ? (
+                      <div className="ms-auto">
+                        <button
+                          type="button"
+                          onClick={() => setDeleteTarget(plan)}
+                          className="inline-flex items-center justify-center min-h-[44px] min-w-[44px] rounded-lg border border-destructive/50 text-destructive hover:bg-destructive/10 transition-colors"
+                          aria-label={`Delete ${formatPlanDrugHeading(plan)} document`}
+                          title={`Delete ${formatPlanDrugHeading(plan)} document`}
+                        >
+                          <Trash2 className="w-4 h-4 shrink-0" aria-hidden="true" />
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {showSrc ? (
+                    <div
+                      id={`compare-source-${plan.id}`}
+                      className="mt-2 p-3 bg-muted/50 rounded-lg border border-border"
+                      role="region"
+                      aria-label="Source document excerpt"
+                    >
+                      <p className="text-sm italic text-foreground leading-relaxed mb-2">
+                        &quot;{c.sourceSnippet}&quot;
+                      </p>
+                      {hasSourceDocumentLink ? (
+                        <a
+                          href={c.sourceDocLink}
+                          className="inline-flex items-center gap-1.5 min-h-[44px] text-sm text-primary underline hover:text-primary/80"
+                        >
+                          <ExternalLink className="w-4 h-4" aria-hidden="true" />
+                          {sourceLinkLabel}
+                          <span className="sr-only">(opens in new window)</span>
+                        </a>
+                      ) : (
+                        <p className="text-sm text-muted-foreground mb-0">
+                          {sourceLinkLabel}
+                        </p>
+                      )}
+                    </div>
+                  ) : null}
+                </article>
+              </div>
+            );
+          })}
         </div>
 
         <div
@@ -126,7 +350,7 @@ export function ComparisonPanel({
                       >
                         {plan.payer}
                       </span>
-                      {plan.drugName}
+                      {formatPlanDrugHeading(plan)}
                     </th>
                   );
                 })}
@@ -151,20 +375,22 @@ export function ComparisonPanel({
                     {plans.map((plan, index) => {
                       const value = values[index];
                       const isDiff = diffs[index];
-                      const statusStyle = STATUS_STYLES[plan.coverageStatus];
 
                       return (
                         <td
                           key={plan.id}
-                          className={`p-3 align-top ${isDiff ? "bg-amber-50 border-l-4 border-amber-500" : ""}`}
+                          className={`p-3 align-top ${
+                            isDiff ? "bg-amber-50 border-l-4 border-amber-500" : ""
+                          }`}
                         >
-                          {row.key === "status" ? (
-                            <span
-                              className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-sm ${statusStyle.bg} ${statusStyle.text}`}
+                          {row.key === "clinicalCriteria" ? (
+                            <div
+                              className={`space-y-1.5 whitespace-pre-line ${
+                                isDiff ? "text-amber-900" : ""
+                              }`}
                             >
-                              <span aria-hidden="true">{statusStyle.icon}</span>
                               {value}
-                            </span>
+                            </div>
                           ) : (
                             <span className={isDiff ? "text-amber-900" : ""}>
                               {value}

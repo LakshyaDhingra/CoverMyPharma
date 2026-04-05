@@ -2,6 +2,7 @@ import {
   useState,
   useRef,
   useCallback,
+  useEffect,
   type DragEvent,
   type ChangeEvent,
 } from "react";
@@ -35,7 +36,10 @@ interface UploadedFile {
 
 interface UploadPageProps {
   onContinue: () => void;
-  onUploadSuccess: (data: unknown) => void;
+  onUploadSuccess: (
+    data: unknown,
+    meta?: { documentId?: string; filename?: string },
+  ) => void;
 }
 
 const FEATURES = [
@@ -55,6 +59,9 @@ const FEATURES = [
     desc: "Every policy update is timestamped and recorded on-chain so you always know what changed and when.",
   },
 ];
+
+/** After login, continue to the main app (comparison / coverage search). */
+const POST_LOGIN_CONTINUE_KEY = "cmp_post_login_continue_to_app";
 
 function flattenToStrings(value: unknown): string[] {
   if (value == null) return [];
@@ -102,10 +109,35 @@ export default function UploadPage({
 
   useSupabaseUser();
 
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    try {
+      if (sessionStorage.getItem(POST_LOGIN_CONTINUE_KEY) === "1") {
+        sessionStorage.removeItem(POST_LOGIN_CONTINUE_KEY);
+        onContinue();
+      }
+    } catch {
+      /* sessionStorage unavailable */
+    }
+  }, [isAuthenticated, onContinue]);
+
+  const handleViewComparison = useCallback(() => {
+    if (isAuthenticated) {
+      onContinue();
+      return;
+    }
+    try {
+      sessionStorage.setItem(POST_LOGIN_CONTINUE_KEY, "1");
+    } catch {
+      /* sessionStorage unavailable */
+    }
+    loginWithRedirect();
+  }, [isAuthenticated, loginWithRedirect, onContinue]);
+
   const persistUploadedDocument = useCallback(
     async (file: File, responseData: ParsePdfResponse) => {
       if (!hasSupabaseConfig || !supabase || !user?.sub) {
-        return;
+        return undefined;
       }
 
       const { data: userData, error: userError } = await supabase
@@ -130,25 +162,34 @@ export default function UploadPage({
       const medication = normalizeText(analysis?.medication_name);
       const summary = normalizeText(analysis?.summary);
 
-      const { error: docError } = await supabase.from("medical_documents").insert({
-        user_id: userData.id,
-        filename: file.name,
-        file_size: file.size,
-        drug_name: medication || null,
-        conditions: diagnosis || null,
-        prior_auth_required:
-          analysis?.prior_auth_required == null
-            ? null
-            : String(analysis.prior_auth_required),
-        clinical_criteria: summary || null,
-        diagnosis_codes: diagnosis || null,
-        effective_date: null,
-        raw_extracted_data: responseData,
-      });
+      const { data: inserted, error: docError } = await supabase
+        .from("medical_documents")
+        .insert({
+          user_id: userData.id,
+          filename: file.name,
+          file_size: file.size,
+          drug_name: medication || null,
+          conditions: diagnosis || null,
+          prior_auth_required:
+            analysis?.prior_auth_required == null
+              ? null
+              : String(analysis.prior_auth_required),
+          clinical_criteria: summary || null,
+          diagnosis_codes: diagnosis || null,
+          effective_date: null,
+          policy_changes: Array.isArray(analysis?.policy_changes)
+            ? analysis.policy_changes
+            : [],
+          raw_extracted_data: responseData,
+        })
+        .select()
+        .single();
 
       if (docError) {
         throw docError;
       }
+
+      return inserted?.id as string | undefined;
     },
     [user],
   );
@@ -190,13 +231,14 @@ export default function UploadPage({
           );
         }
 
-        onUploadSuccess(data);
-
+        let documentId: string | undefined;
         try {
-          await persistUploadedDocument(file, data);
+          documentId = await persistUploadedDocument(file, data);
         } catch (persistError) {
           console.warn("Supabase persistence skipped:", persistError);
         }
+
+        onUploadSuccess(data, { documentId, filename: file.name });
 
         setFiles((prev) =>
           prev.map((f) => (f.id === fileId ? { ...f, status: "done" } : f)),
@@ -270,6 +312,18 @@ export default function UploadPage({
         </div>
 
         <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={handleViewComparison}
+            className="text-sm px-4 py-2 rounded-lg transition-all duration-200 hover:shadow-md text-white border border-white/25 hover:bg-white/20"
+            aria-label={
+              isAuthenticated
+                ? "Open coverage comparison and search"
+                : "Sign in to open coverage comparison and search"
+            }
+          >
+            Coverage comparison
+          </button>
           {isAuthenticated ? (
             <>
               <span className="text-sm text-white">Hello, {user?.name}</span>
@@ -300,20 +354,6 @@ export default function UploadPage({
                 Get started
               </button>
             </>
-          )}
-          {isAuthenticated && (
-            <button
-              onClick={onContinue}
-              disabled={!canContinue}
-              className="text-sm font-medium px-4 py-2 rounded-lg transition-all duration-200"
-              style={{
-                background: canContinue ? "#3d3d3d" : "#9ca3af",
-                color: canContinue ? "white" : "#d1d5db",
-                cursor: canContinue ? "pointer" : "not-allowed",
-              }}
-            >
-              {canContinue ? "Continue to analysis" : "Upload docs first"}
-            </button>
           )}
         </div>
       </header>

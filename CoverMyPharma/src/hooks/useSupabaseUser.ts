@@ -1,37 +1,27 @@
 import { useEffect } from "react";
 import { useAuth0 } from "@auth0/auth0-react";
-import { hasSupabaseConfig, supabase } from "@/lib/supabase";
+import { hasSupabaseConfig } from "@/lib/supabase";
+import { ensureSupabaseUserId } from "@/lib/ensureSupabaseUser";
 
 export function useSupabaseUser() {
   const { user, isAuthenticated } = useAuth0();
 
   useEffect(() => {
     const syncUser = async () => {
-      if (!hasSupabaseConfig || !supabase) {
+      if (!hasSupabaseConfig) {
         return;
       }
 
       if (isAuthenticated && user?.sub) {
         try {
-          const { error } = await supabase.from("users").upsert(
-            {
-              auth0_id: user.sub,
-              email: user.email ?? "",
-              name: user.name ?? null,
-            },
-            { onConflict: "auth0_id" },
-          );
-
-          if (error) {
-            console.error("Failed to sync user with Supabase:", error);
-          }
+          await ensureSupabaseUserId(user);
         } catch (err) {
           console.error("Error syncing user:", err);
         }
       }
     };
 
-    syncUser();
+    void syncUser();
   }, [isAuthenticated, user]);
 
   return { user, isAuthenticated };

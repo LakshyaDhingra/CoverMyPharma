@@ -10,6 +10,8 @@ interface TtsIconButtonProps {
   text: string;
   label: string;
   voiceId?: string;
+  /** HTMLAudioElement playback rate (default 1) */
+  playbackRate?: number;
   className?: string;
 }
 
@@ -17,6 +19,7 @@ export function TtsIconButton({
   text,
   label,
   voiceId,
+  playbackRate = 1,
   className = "",
 }: TtsIconButtonProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -52,6 +55,12 @@ export function TtsIconButton({
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (!audioRef.current) return;
+
+    audioRef.current.playbackRate = playbackRate;
+  }, [playbackRate]);
 
   useEffect(() => {
     if (!audioRef.current) return;
@@ -97,6 +106,7 @@ export function TtsIconButton({
 
     if (audioUrlRef.current) {
       audioRef.current.src = audioUrlRef.current;
+      audioRef.current.playbackRate = playbackRate;
       activeAudio = audioRef.current;
       clearActiveButton = () => setIsPlaying(false);
       await audioRef.current.play().catch(() => {
@@ -117,6 +127,7 @@ export function TtsIconButton({
       const audioUrl = await generateSpeechAudio(text, voiceId);
       audioUrlRef.current = audioUrl;
       audioRef.current.src = audioUrl;
+      audioRef.current.playbackRate = playbackRate;
       activeAudio = audioRef.current;
       clearActiveButton = () => setIsPlaying(false);
       await audioRef.current.play();

@@ -22,16 +22,27 @@ export interface ClinicalCriteria {
 
 export interface PlanCard {
   id: string;
+  /** Supabase `medical_documents.id` when persisted — enables delete */
+  documentId?: string;
   payer: Payer;
   drugName: string;
+  genericName?: string;
+  conditions?: string;
+  /** Optional long-form clinical text from uploads (shown in criteria table) */
+  clinicalCriteria?: string;
+  priorAuthRequirement?: string;
   rxNormCode: string;
   coverageStatus: CoverageStatus;
   effectiveDate: string;
   effectiveDateLabel?: string;
   sourceLinkLabel?: string;
   hasSourceDocumentLink?: boolean;
+  /** Original PDF filename when uploaded */
+  sourceFilename?: string;
   diagnosisCodes: string[];
   criteria: ClinicalCriteria;
+  /** Parsed policy change rows from upload / Supabase `policy_changes` */
+  policyChanges?: PolicyChange[];
 }
 
 export interface DiagnosisOption {

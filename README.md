@@ -182,8 +182,13 @@ create table if not exists public.medical_documents (
   clinical_criteria text,
   diagnosis_codes text,
   effective_date text,
+  policy_changes jsonb default '[]'::jsonb,
   raw_extracted_data jsonb
 );
+
+-- If you already created medical_documents without policy_changes, run once:
+-- alter table public.medical_documents
+--   add column policy_changes jsonb default '[]'::jsonb;
 
 create index if not exists idx_users_auth0_id
   on public.users(auth0_id);

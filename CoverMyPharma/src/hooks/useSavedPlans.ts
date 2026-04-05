@@ -1,18 +1,22 @@
 import { useCallback, useEffect, useState } from "react";
 import { useAuth0 } from "@auth0/auth0-react";
-
-import type { PlanCard } from "@/app/components/types";
-import { transformStoredDocumentToPlan } from "@/app/lib/plan-transform";
+import { planFromMedicalDocumentRow } from "@/app/lib/plan-transform";
 import { hasSupabaseConfig, supabase } from "@/lib/supabase";
+import { ensureSupabaseUserId } from "@/lib/ensureSupabaseUser";
+import type { PlanCard } from "@/app/components/types";
 
 export function useSavedPlans() {
-  const { user, isAuthenticated } = useAuth0();
+  const { user, isAuthenticated, isLoading: authLoading } = useAuth0();
   const [plans, setPlans] = useState<PlanCard[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
-    if (!hasSupabaseConfig || !supabase || !isAuthenticated || !user?.sub) {
+  const load = useCallback(async () => {
+    if (authLoading) {
+      return;
+    }
+
+    if (!hasSupabaseConfig || !supabase || !isAuthenticated || !user) {
       setPlans([]);
       setIsLoading(false);
       setError(null);
@@ -23,48 +27,42 @@ export function useSavedPlans() {
     setError(null);
 
     try {
-      const { data: userRow, error: userError } = await supabase
-        .from("users")
-        .select("id")
-        .eq("auth0_id", user.sub)
-        .maybeSingle();
+      const userId = await ensureSupabaseUserId(user);
 
-      if (userError) {
-        throw userError;
-      }
-
-      if (!userRow) {
+      if (!userId) {
         setPlans([]);
         return;
       }
 
-      const { data: documents, error: docError } = await supabase
+      const { data: rows, error: docError } = await supabase
         .from("medical_documents")
         .select("*")
-        .eq("user_id", userRow.id)
+        .eq("user_id", userId)
         .order("uploaded_at", { ascending: false });
 
       if (docError) {
         throw docError;
       }
 
-      setPlans((documents ?? []).map(transformStoredDocumentToPlan));
-    } catch (loadError) {
-      console.error("Failed to load saved plans:", loadError);
-      setPlans([]);
+      const next: PlanCard[] = (rows ?? [])
+        .map((row) => planFromMedicalDocumentRow(row))
+        .filter((p): p is PlanCard => p != null);
+
+      setPlans(next);
+    } catch (e) {
+      console.error("useSavedPlans:", e);
       setError(
-        loadError instanceof Error
-          ? loadError.message
-          : "Unable to load saved plans.",
+        e instanceof Error ? e.message : "Failed to load saved documents",
       );
+      setPlans([]);
     } finally {
       setIsLoading(false);
     }
-  }, [isAuthenticated, user?.sub]);
+  }, [authLoading, isAuthenticated, user]);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    void load();
+  }, [load]);
 
-  return { plans, isLoading, error, refresh };
+  return { plans, isLoading, error, reload: load };
 }

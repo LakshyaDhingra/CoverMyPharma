@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { FileText, ExternalLink, Trash2, X } from "lucide-react";
+import { FileText, ExternalLink, Trash2 } from "lucide-react";
 import {
   PlanCard,
   PAYER_COLORS,
@@ -18,27 +18,26 @@ import {
   VOICE_OPTIONS,
 } from "./tts";
 
-interface DetailPanelProps {
+export interface CriteriaLookupResultDocumentProps {
   plan: PlanCard;
-  onClose: () => void;
   voiceId?: string;
-  onVoiceChange: (voiceId: string) => void;
+  onVoiceChange?: (voiceId: string) => void;
   playbackRate?: number;
   onPlaybackRateChange?: (playbackRate: number) => void;
   onDeleteDocument?: (documentId: string) => boolean | Promise<boolean>;
 }
 
-export function DetailPanel({
+export function CriteriaLookupResultDocument({
   plan,
-  onClose,
   voiceId,
   onVoiceChange,
   playbackRate = 1,
   onPlaybackRateChange,
   onDeleteDocument,
-}: DetailPanelProps) {
+}: CriteriaLookupResultDocumentProps) {
   const [showSource, setShowSource] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
   const payerStyle = PAYER_COLORS[plan.payer] ?? DEFAULT_PAYER_STYLE;
   const statusStyle = STATUS_STYLES[plan.coverageStatus];
   const c = plan.criteria;
@@ -49,12 +48,15 @@ export function DetailPanel({
   const priorAuthRequirement = getPlanPriorAuthRequirement(plan);
   const diagnosisCodes = plan.diagnosisCodes.join(", ");
   const coverageEffectiveDate = formatEffectiveDate(plan.effectiveDate);
-  const documentId = plan.documentId;
+
   const planRows = [
     {
-      label: "Drug Name / Generic Name",
-      value: formatPlanDrugHeading(plan),
+      label: "Generic name",
+      value: plan.genericName?.trim() ? plan.genericName : "Not specified",
     },
+    ...(plan.sourceFilename
+      ? [{ label: "Source file", value: plan.sourceFilename }]
+      : []),
     {
       label: "Conditions / Diagnosis",
       value: conditions,
@@ -77,11 +79,15 @@ export function DetailPanel({
     },
   ];
 
+  const documentId = plan.documentId;
+  const showVoiceBar = Boolean(
+    voiceId != null && onVoiceChange && onPlaybackRateChange,
+  );
+
   return (
-    <section
-      className="border-t-2 border-border bg-card"
-      aria-label={`Detail panel for ${formatPlanDrugHeading(plan)} - ${plan.payer}`}
-      role="region"
+    <article
+      className="w-full rounded-xl border border-border bg-card shadow-sm overflow-hidden"
+      aria-label={`Criteria document for ${formatPlanDrugHeading(plan)} — ${plan.payer}`}
     >
       {showDeleteConfirm && documentId && onDeleteDocument ? (
         <div
@@ -92,17 +98,17 @@ export function DetailPanel({
           <div
             role="dialog"
             aria-modal="true"
-            aria-labelledby="delete-detail-doc-title"
+            aria-labelledby={`delete-doc-title-${plan.id}`}
             className="bg-card border border-border rounded-xl shadow-lg max-w-md w-full p-6"
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 id="delete-detail-doc-title" className="mt-0 mb-2">
+            <h3 id={`delete-doc-title-${plan.id}`} className="mt-0 mb-2">
               Delete this document?
             </h3>
             <p className="text-sm text-muted-foreground mb-4">
               This removes <strong>{formatPlanDrugHeading(plan)}</strong> (
-              {plan.payer}) from
-              your account and database. This cannot be undone.
+              {plan.payer}) from your
+              account and database. This cannot be undone.
             </p>
             <div className="flex flex-wrap gap-3 justify-end">
               <button
@@ -127,11 +133,13 @@ export function DetailPanel({
         </div>
       ) : null}
 
-      <div className="p-6 max-w-5xl mx-auto">
-        <div className="flex items-start justify-between mb-5">
-          <div>
-            <div className="flex items-center gap-3 flex-wrap">
-              <h2 className="mt-0">{formatPlanDrugHeading(plan)}</h2>
+      <div className="p-6 w-full">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between mb-5">
+          <div className="min-w-0 flex-1">
+            <h2 className="mt-0 text-xl sm:text-2xl leading-snug break-words">
+              {formatPlanDrugHeading(plan)}
+            </h2>
+            <div className="flex items-center gap-2 flex-wrap mt-3">
               <span
                 className={`px-2.5 py-0.5 rounded-full text-sm ${payerStyle.bg} ${payerStyle.text}`}
               >
@@ -145,103 +153,112 @@ export function DetailPanel({
               </span>
             </div>
           </div>
-          <div className="flex items-center gap-2 flex-wrap justify-end">
-            <label
-              htmlFor={`voice-select-${plan.id}`}
-              className="text-sm text-muted-foreground"
-            >
-              Voice
-            </label>
-            <select
-              id={`voice-select-${plan.id}`}
-              value={voiceId}
-              onChange={(e) => onVoiceChange(e.target.value)}
-              className="px-3 py-2 min-h-[44px] rounded-lg border border-border bg-input-background text-sm min-w-[140px]"
-            >
-              {VOICE_OPTIONS.map((voice) => (
-                <option key={voice.id} value={voice.id}>
-                  {voice.label}
-                </option>
-              ))}
-            </select>
-            <label
-              htmlFor={`speed-select-${plan.id}`}
-              className="text-sm text-muted-foreground"
-            >
-              Speed
-            </label>
-            <select
-              id={`speed-select-${plan.id}`}
-              value={String(playbackRate)}
-              onChange={(e) => onPlaybackRateChange?.(Number(e.target.value))}
-              disabled={!onPlaybackRateChange}
-              className="px-3 py-2 min-h-[44px] rounded-lg border border-border bg-input-background text-sm min-w-[96px]"
-            >
-              {PLAYBACK_SPEED_OPTIONS.map((speed) => (
-                <option key={speed.label} value={speed.value}>
-                  {speed.label}
-                </option>
-              ))}
-            </select>
-            <TtsIconButton
-              text={speechSummary}
-              label={`${formatPlanDrugHeading(plan)} ${plan.payer} detail summary`}
-              voiceId={voiceId}
-              playbackRate={playbackRate}
-              className="min-w-[44px] min-h-[44px]"
-            />
-            <button
-              onClick={onClose}
-              className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg hover:bg-muted transition-colors"
-              aria-label="Close detail panel"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
+          {showVoiceBar ? (
+            <div className="flex items-center gap-2 flex-wrap shrink-0">
+              <label
+                htmlFor={`criteria-voice-${plan.id}`}
+                className="text-sm text-muted-foreground"
+              >
+                Voice
+              </label>
+              <select
+                id={`criteria-voice-${plan.id}`}
+                value={voiceId}
+                onChange={(e) => onVoiceChange!(e.target.value)}
+                className="px-3 py-2 min-h-[44px] rounded-lg border border-border bg-input-background text-sm min-w-[140px]"
+              >
+                {VOICE_OPTIONS.map((voice) => (
+                  <option key={voice.id} value={voice.id}>
+                    {voice.label}
+                  </option>
+                ))}
+              </select>
+              <label
+                htmlFor={`criteria-speed-${plan.id}`}
+                className="text-sm text-muted-foreground"
+              >
+                Speed
+              </label>
+              <select
+                id={`criteria-speed-${plan.id}`}
+                value={String(playbackRate)}
+                onChange={(e) =>
+                  onPlaybackRateChange!(Number(e.target.value))
+                }
+                className="px-3 py-2 min-h-[44px] rounded-lg border border-border bg-input-background text-sm min-w-[96px]"
+              >
+                {PLAYBACK_SPEED_OPTIONS.map((speed) => (
+                  <option key={speed.label} value={speed.value}>
+                    {speed.label}
+                  </option>
+                ))}
+              </select>
+              <TtsIconButton
+                text={speechSummary}
+                label={`${formatPlanDrugHeading(plan)} ${plan.payer} criteria summary`}
+                voiceId={voiceId!}
+                playbackRate={playbackRate}
+                className="min-w-[44px] min-h-[44px]"
+              />
+            </div>
+          ) : null}
         </div>
 
         <div
-          className="overflow-x-auto"
+          className="overflow-x-auto rounded-lg border border-border"
           tabIndex={0}
           role="region"
-          aria-label="Plan detail table"
+          aria-label="Plan criteria table"
         >
           <table className="w-full border-collapse text-sm" aria-label="Plan detail">
             <thead>
               <tr>
                 <th
                   scope="col"
-                  className="text-left p-3 bg-muted rounded-tl-lg w-48 min-w-[180px]"
+                  className="text-left p-3 bg-muted w-48 min-w-[180px] rounded-tl-lg"
                 >
                   Criteria
                 </th>
-                <th scope="col" className="text-left p-3 bg-muted">
+                <th
+                  scope="col"
+                  className="text-left p-3 bg-muted rounded-tr-lg"
+                >
                   <span
-                    className={`inline-block px-2 py-0.5 rounded-full text-sm ${payerStyle.bg} ${payerStyle.text} mr-2`}
+                    className={`inline-block px-2 py-0.5 rounded-full text-sm ${payerStyle.bg} ${payerStyle.text}`}
                   >
                     {plan.payer}
                   </span>
-                  {formatPlanDrugHeading(plan)}
+                  <span className="sr-only">
+                    {" "}
+                    — {formatPlanDrugHeading(plan)}
+                  </span>
+                  <span className="ml-2 text-muted-foreground font-normal">
+                    Details
+                  </span>
                 </th>
               </tr>
             </thead>
             <tbody>
               {planRows.map((row, index) => (
                 <tr
-                  key={row.label}
+                  key={`${plan.id}-${row.label}`}
                   className={index % 2 === 0 ? "" : "bg-muted/30"}
                 >
                   <th
                     scope="row"
-                    className="p-3 text-muted-foreground align-top text-left"
+                    className="p-3 text-foreground font-semibold align-top text-left"
                   >
                     {row.label}
                   </th>
-                  <td className="p-3 align-top">
+                  <td className="p-3 align-top break-words">
                     {row.label === "Clinical Criteria" ? (
                       <div className="space-y-1.5 whitespace-pre-line">
                         {row.value}
                       </div>
+                    ) : row.label === "Source file" ? (
+                      <span className="font-mono text-xs sm:text-sm">
+                        {row.value}
+                      </span>
                     ) : (
                       <span>{row.value}</span>
                     )}
@@ -259,7 +276,7 @@ export function DetailPanel({
               onClick={() => setShowSource(!showSource)}
               className="inline-flex items-center gap-2 px-4 py-2.5 min-h-[44px] rounded-lg bg-muted hover:bg-accent transition-colors text-sm border border-border"
               aria-expanded={showSource}
-              aria-controls="source-panel"
+              aria-controls={`criteria-source-${plan.id}`}
             >
               <FileText className="w-4 h-4" aria-hidden="true" />
               {showSource ? "Hide Source" : "View Source"}
@@ -280,7 +297,7 @@ export function DetailPanel({
           </div>
           {showSource ? (
             <div
-              id="source-panel"
+              id={`criteria-source-${plan.id}`}
               className="mt-3 p-4 bg-muted/50 rounded-lg border border-border"
               role="region"
               aria-label="Source document excerpt"
@@ -306,6 +323,6 @@ export function DetailPanel({
           ) : null}
         </div>
       </div>
-    </section>
+    </article>
   );
 }
